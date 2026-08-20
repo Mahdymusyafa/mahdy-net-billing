@@ -1,0 +1,203 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#f5f8fd">
+<title>MAHDY-NET Billing</title>
+<link rel="stylesheet" href="styles.css">
+<script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<div class="app">
+<header class="topbar">
+  <div class="brand">
+    <div class="logo-wrap"><img class="logo" src="assets/logo-mahdy-net.png" alt="Logo MAHDY-NET"></div>
+    <div class="brand-text">
+      <h1>MAHDY-NET Billing</h1><p>Billing pelanggan PPPoE</p>
+      <div class="cloud-pill" id="cloudPill"><span class="cloud-dot"></span><span id="cloudText">Drive belum terhubung</span></div>
+    </div>
+  </div>
+  <div class="actions">
+    <button class="btn btn-soft" id="saveBtn">💾 Save</button>
+    <button class="btn" id="syncBtn">⟳ Sinkron</button>
+    <button class="btn" id="backupBtn">⬇ Backup</button>
+    <button class="btn" id="restoreBtn">↥ Restore</button>
+  </div>
+</header>
+
+<nav class="tabs">
+  <button class="tab active" data-tab="dashboard">Dashboard</button>
+  <button class="tab" data-tab="customers">Pelanggan</button>
+  <button class="tab" data-tab="packages">Paket</button>
+  <button class="tab" data-tab="payments">Pembayaran</button>
+  <button class="tab" data-tab="settings">Pengaturan</button>
+</nav>
+
+<section class="section active" id="dashboard">
+  <div class="cards">
+    <div class="card"><div class="label">Total Pelanggan</div><div class="value" id="dashCustomers">0</div><div class="sub">Pelanggan aktif</div></div>
+    <div class="card"><div class="label">Lunas Bulan Ini</div><div class="value" id="dashPaid">0</div><div class="sub" id="dashMonth">—</div></div>
+    <div class="card"><div class="label">Menunggak</div><div class="value" id="dashArrears">0</div><div class="sub">Tagihan lewat tanggal bayar</div></div>
+    <div class="card"><div class="label">Pendapatan Bulan Ini</div><div class="value" id="dashRevenue">Rp0</div><div class="sub">Dari pembayaran tercatat</div></div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h2>Ringkasan</h2><span class="help" id="lastSaved">Belum disimpan</span></div>
+    <div class="panel-body"><div id="todaySummary" class="help">Belum ada data.</div></div>
+  </div>
+</section>
+
+<section class="section" id="customers">
+  <div class="panel">
+    <div class="panel-head"><h2>Tambah Pelanggan</h2></div>
+    <div class="panel-body">
+      <div class="grid3">
+        <div class="field"><label>Nama pelanggan</label><input id="custName" placeholder="Contoh: Ahmad"></div>
+        <div class="field"><label>Paket internet</label><select id="custPackage"></select></div>
+        <div class="field"><label>Harga khusus (opsional)</label><input id="custCustomPrice" inputmode="numeric" placeholder="Kosong = ikut paket"></div>
+        <div class="field"><label>Tanggal registrasi</label><input id="custRegDate" type="date"></div>
+        <div class="field"><label>Mulai berlangganan</label><input id="custStartDate" type="date"></div>
+        <div class="field"><label>Tanggal tagihan pertama</label><input id="custDueDate" type="date"></div>
+      </div>
+      <div class="help" style="margin-top:8px">Sistem pascabayar: pelanggan memakai layanan lebih dulu. Tanggal tagihan pertama biasanya satu bulan setelah mulai berlangganan, lalu berulang pada tanggal yang sama setiap bulan.</div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="addCustomerBtn">＋ Simpan Pelanggan</button></div>
+    </div>
+  </div>
+
+  <div class="panel">
+    <div class="panel-head"><h2>Daftar Pembayaran Tahunan</h2></div>
+    <div class="panel-body" style="padding-bottom:10px">
+      <div class="toolbar">
+        <div class="field search"><label>Cari pelanggan</label><input id="searchInput" placeholder="Ketik nama pelanggan..."></div>
+        <div class="field"><label>Tahun</label><select id="yearSelect"></select></div>
+        <div class="field"><label>Tampilkan</label><select id="pageSize"><option>10</option><option>20</option><option>25</option><option>50</option><option>100</option></select></div>
+      </div>
+    </div>
+    <div class="insight" id="insight">
+      <div class="insight-head"><b id="insightName">—</b><div class="help" id="insightDate">—</div></div>
+      <div class="insight-grid">
+        <div class="metric blue"><div class="m-label">Bulan berjalan</div><div class="m-value" id="insightCurrent">—</div></div>
+        <div class="metric amber"><div class="m-label">Tunggakan</div><div class="m-value" id="insightArrears">—</div></div>
+        <div class="metric green"><div class="m-label">Paket</div><div class="m-value" id="insightPackage">—</div></div>
+      </div>
+      <div class="chips" id="insightChips"></div>
+    </div>
+    <div class="table-wrap">
+      <table>
+        <thead><tr id="tableHeader"><th>No.</th><th>Nama Pelanggan</th></tr></thead>
+        <tbody id="customerBody"></tbody>
+      </table>
+    </div>
+    <div class="pagination">
+      <div class="help" id="pageInfo">0 data</div>
+      <div class="page-controls" id="pageControls"></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="packages">
+  <div class="panel">
+    <div class="panel-head"><h2>Preset Paket</h2><span class="help">Buat sekali, pilih saat menambah pelanggan</span></div>
+    <div class="panel-body">
+      <div class="grid3">
+        <div class="field"><label>Nama paket</label><input id="pkgName" placeholder="Contoh: Reguler"></div>
+        <div class="field"><label>Kecepatan</label><input id="pkgSpeed" placeholder="Contoh: 10 Mbps"></div>
+        <div class="field"><label>Tarif bulanan</label><input id="pkgPrice" inputmode="numeric" placeholder="150000"></div>
+      </div>
+      <div style="margin-top:12px"><button class="btn btn-primary" id="addPackageBtn">＋ Simpan Paket</button></div>
+    </div>
+  </div>
+  <div class="panel">
+    <div class="panel-head"><h2>Paket Tersimpan</h2></div>
+    <div class="panel-body"><div class="package-list" id="packageList"></div></div>
+  </div>
+</section>
+
+<section class="section" id="payments">
+  <div class="panel">
+    <div class="panel-head"><h2>Riwayat Pembayaran</h2></div>
+    <div class="panel-body">
+      <div class="field"><label>Cari pelanggan</label><input id="paymentSearch" placeholder="Ketik nama pelanggan..."></div>
+      <div class="history" id="paymentHistory"></div>
+    </div>
+  </div>
+</section>
+
+<section class="section" id="settings">
+  <div class="settings-grid">
+    <div class="setting-card">
+      <div class="setting-title">Google Drive</div>
+      <div class="help">Hubungkan akun Google untuk Sinkron, Backup, dan Restore.</div>
+      <div class="cloud-status" id="settingsCloudStatus"><i></i><span id="settingsCloudText">Belum terhubung</span></div>
+      <div class="field"><label>Google OAuth Client ID</label><input id="googleClientId" placeholder="xxxxxxxx.apps.googleusercontent.com"></div>
+      <div class="help" style="margin-top:6px">Client ID dibuat sekali di Google Cloud Console. Scope yang dipakai aplikasi: <b>drive.file</b>.</div>
+      <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:12px">
+        <button class="btn btn-primary" id="connectGoogleBtn">Hubungkan Google</button>
+        <button class="btn" id="disconnectGoogleBtn">Putuskan</button>
+      </div>
+    </div>
+    <div class="setting-card">
+      <div class="setting-title">Penyimpanan</div>
+      <div class="help">Data kerja tetap tersimpan lokal di HP. Drive berfungsi untuk sinkron dan backup.</div>
+      <div style="margin-top:12px" class="help">
+        File utama Drive: <b>mahdy-net-data.json</b><br>
+        Folder backup: <b>MAHDY-NET Backups</b>
+      </div>
+      <div style="margin-top:12px"><button class="btn" id="exportLocalBtn">Export JSON Lokal</button></div>
+    </div>
+  </div>
+</section>
+</div>
+
+<div class="modal" id="paymentModal">
+  <div class="modal-box">
+    <h3 id="paymentTitle">Pembayaran</h3>
+    <div class="grid">
+      <div class="field"><label>Periode</label><input id="payPeriod" disabled></div>
+      <div class="field"><label>Nominal</label><input id="payAmount" inputmode="numeric"></div>
+      <div class="field"><label>Tanggal bayar</label><input id="payDate" type="date"></div>
+      <div class="field"><label>Metode</label><select id="payMethod"><option>Tunai</option><option>Transfer</option><option>Lainnya</option></select></div>
+    </div>
+    <div class="field" style="margin-top:10px"><label>Catatan</label><input id="payNote" placeholder="Opsional"></div>
+    <div class="modal-actions">
+      <button class="btn btn-danger" id="deletePaymentBtn">Batalkan Pembayaran</button>
+      <button class="btn" id="closePaymentBtn">Tutup</button>
+      <button class="btn btn-primary" id="savePaymentBtn">Simpan Pembayaran</button>
+    </div>
+  </div>
+</div>
+
+<div class="modal" id="customerModal">
+  <div class="modal-box">
+    <h3 id="customerModalTitle">Detail Pelanggan</h3>
+    <div id="customerDetail"></div><div class="history" id="customerHistory"></div>
+    <div class="modal-actions"><button class="btn" id="closeCustomerBtn">Tutup</button></div>
+  </div>
+</div>
+
+<div class="modal" id="editPackageModal">
+  <div class="modal-box">
+    <h3>Edit Paket</h3>
+    <div class="grid3">
+      <div class="field"><label>Nama paket</label><input id="editPkgName"></div>
+      <div class="field"><label>Kecepatan</label><input id="editPkgSpeed"></div>
+      <div class="field"><label>Tarif bulanan</label><input id="editPkgPrice" inputmode="numeric"></div>
+    </div>
+    <div class="help" style="margin-top:9px">Mengubah paket tidak mengubah nominal pembayaran lama yang sudah tercatat.</div>
+    <div class="modal-actions"><button class="btn" id="closeEditPkgBtn">Batal</button><button class="btn btn-primary" id="saveEditPkgBtn">Simpan Perubahan</button></div>
+  </div>
+</div>
+
+<div class="modal" id="restoreModal">
+  <div class="modal-box">
+    <h3>Restore</h3>
+    <div id="restoreList" class="history"></div>
+    <div class="modal-actions"><button class="btn" id="closeRestoreBtn">Tutup</button></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+
+<script src="app.js"></script>
+</body>
+</html>
