@@ -171,7 +171,7 @@
   <div class="modal-box">
     <h3 id="customerModalTitle">Detail Pelanggan</h3>
     <div id="customerDetail"></div><div class="history" id="customerHistory"></div>
-    <div class="modal-actions"><button class="btn" id="closeCustomerBtn">Tutup</button></div>
+    <div class="modal-actions"><button class="btn btn-soft" id="editCustomerBtn">✎ Edit Pelanggan</button><button class="btn" id="closeCustomerBtn">Tutup</button></div>
   </div>
 </div>
 
@@ -185,6 +185,32 @@
     </div>
     <div class="help" style="margin-top:9px">Mengubah paket tidak mengubah nominal pembayaran lama yang sudah tercatat.</div>
     <div class="modal-actions"><button class="btn" id="closeEditPkgBtn">Batal</button><button class="btn btn-primary" id="saveEditPkgBtn">Simpan Perubahan</button></div>
+  </div>
+</div>
+
+
+<div class="modal" id="editCustomerModal">
+  <div class="modal-box">
+    <div class="modal-title-row">
+      <div>
+        <div class="eyebrow">DATA PELANGGAN</div>
+        <h3>Edit Pelanggan</h3>
+      </div>
+      <span class="soft-badge">Perubahan tersimpan lokal</span>
+    </div>
+    <div class="grid3">
+      <div class="field"><label>Nama pelanggan</label><input id="editCustName"></div>
+      <div class="field"><label>Paket internet</label><select id="editCustPackage"></select></div>
+      <div class="field"><label>Harga khusus</label><input id="editCustCustomPrice" inputmode="numeric" placeholder="Kosong = ikut paket"></div>
+      <div class="field"><label>Tanggal registrasi</label><input id="editCustRegDate" type="date"></div>
+      <div class="field"><label>Mulai berlangganan</label><input id="editCustStartDate" type="date"></div>
+      <div class="field"><label>Tanggal tagihan pertama</label><input id="editCustDueDate" type="date"></div>
+    </div>
+    <div class="help note-box">Riwayat pembayaran lama tidak diubah. Jika paket atau tarif diedit, transaksi yang sudah tercatat tetap memakai nominal lama.</div>
+    <div class="modal-actions">
+      <button class="btn" id="closeEditCustomerBtn">Batal</button>
+      <button class="btn btn-primary" id="saveEditCustomerBtn">Simpan Perubahan</button>
+    </div>
   </div>
 </div>
 
