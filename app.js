@@ -74,7 +74,51 @@ async function openPayment(cid,m){const c=(await all("customers")).find(x=>x.id=
 async function savePaymentFn(){const x=paymentContext;if(!x)return;const amount=Number($("payAmount").value.replace(/\D/g,""));if(!amount||!$("payDate").value){toast("Lengkapi pembayaran");return}if(x.existing){x.existing.amount=amount;x.existing.date=$("payDate").value;x.existing.method=$("payMethod").value;x.existing.note=$("payNote").value.trim();await put("payments",x.existing)}else await add("payments",{customerId:x.customer.id,period:x.period,amount,date:$("payDate").value,method:$("payMethod").value,note:$("payNote").value.trim(),createdAt:new Date().toISOString()});$("paymentModal").classList.remove("show");markSaved();await renderAll();toast("Pembayaran disimpan")}
 async function deletePaymentFn(){if(!paymentContext?.existing)return;if(confirm("Batalkan catatan pembayaran?")){await del("payments",paymentContext.existing.id);$("paymentModal").classList.remove("show");markSaved();await renderAll();toast("Pembayaran dibatalkan")}}
 async function openCustomer(id){const c=(await all("customers")).find(x=>x.id===id);if(!c)return;editingCustomerId=id;$("customerModalTitle").textContent=c.name;$("customerDetail").innerHTML=`<div class="grid"><div><b>Paket</b><div class="help">${c.packageName} · ${c.speed}</div></div><div><b>Tarif</b><div class="help">${money(c.monthlyPrice)}/bulan</div></div><div><b>Registrasi</b><div class="help">${c.registrationDate}</div></div><div><b>Mulai berlangganan</b><div class="help">${c.startDate}</div></div><div><b>Tagihan pertama</b><div class="help">${c.firstDueDate}</div></div></div>`;const ps=(await all("payments")).filter(p=>p.customerId===id).sort((a,b)=>b.period.localeCompare(a.period));$("customerHistory").innerHTML="<b>Riwayat pembayaran</b>";if(!ps.length)$("customerHistory").innerHTML+='<div class="help" style="margin-top:8px">Belum ada pembayaran.</div>';ps.forEach(p=>{const{year,month}=parseMonthKey(p.period);$("customerHistory").innerHTML+=`<div class="history-item"><span>${MONTHS[month]} ${year}<br><span class="help">${p.date} · ${p.method}</span></span><b>${money(p.amount)}</b></div>`});$("customerModal").classList.add("show")}
-\nasync function fillCustomerPackageSelect(selectId, selectedId){\n  const ps=await all("packages"),sel=$(selectId);\n  sel.innerHTML="";\n  ps.forEach(p=>{\n    const o=document.createElement("option");\n    o.value=p.id;\n    o.textContent=`${p.name} — ${p.speed} — ${money(p.price)}`;\n    if(Number(selectedId)===Number(p.id))o.selected=true;\n    sel.appendChild(o);\n  });\n}\nasync function openEditCustomer(id){\n  const c=(await all("customers")).find(x=>x.id===id);\n  if(!c)return;\n  editingCustomerId=id;\n  await fillCustomerPackageSelect("editCustPackage",c.packageId);\n  $("editCustName").value=c.name||"";\n  $("editCustCustomPrice").value=c.monthlyPrice||"";\n  $("editCustRegDate").value=c.registrationDate||"";\n  $("editCustStartDate").value=c.startDate||"";\n  $("editCustDueDate").value=c.firstDueDate||"";\n  $("customerModal").classList.remove("show");\n  $("editCustomerModal").classList.add("show");\n}\nasync function saveEditCustomer(){\n  const cs=await all("customers"),c=cs.find(x=>x.id===editingCustomerId);\n  if(!c)return;\n  const name=$("editCustName").value.trim(),\n        packageId=Number($("editCustPackage").value),\n        reg=$("editCustRegDate").value,\n        start=$("editCustStartDate").value,\n        due=$("editCustDueDate").value;\n  if(!name||!packageId||!reg||!start||!due){toast("Lengkapi data pelanggan");return}\n  const pkg=(await all("packages")).find(x=>x.id===packageId);\n  if(!pkg){toast("Paket tidak ditemukan");return}\n  const typedPrice=Number($("editCustCustomPrice").value.replace(/\\D/g,""));\n  c.name=name;c.packageId=packageId;c.packageName=pkg.name;c.speed=pkg.speed;c.monthlyPrice=typedPrice||pkg.price;c.registrationDate=reg;c.startDate=start;c.firstDueDate=due;c.updatedAt=new Date().toISOString();\n  await put("customers",c);\n  $("editCustomerModal").classList.remove("show");\n  markSaved();\n  await renderAll();\n  toast("Data pelanggan diperbarui");\n}\n
+
+async function fillCustomerPackageSelect(selectId, selectedId){
+  const ps=await all("packages"),sel=$(selectId);
+  sel.innerHTML="";
+  ps.forEach(p=>{
+    const o=document.createElement("option");
+    o.value=p.id;
+    o.textContent=`${p.name} — ${p.speed} — ${money(p.price)}`;
+    if(Number(selectedId)===Number(p.id))o.selected=true;
+    sel.appendChild(o);
+  });
+}
+async function openEditCustomer(id){
+  const c=(await all("customers")).find(x=>x.id===id);
+  if(!c)return;
+  editingCustomerId=id;
+  await fillCustomerPackageSelect("editCustPackage",c.packageId);
+  $("editCustName").value=c.name||"";
+  $("editCustCustomPrice").value=c.monthlyPrice||"";
+  $("editCustRegDate").value=c.registrationDate||"";
+  $("editCustStartDate").value=c.startDate||"";
+  $("editCustDueDate").value=c.firstDueDate||"";
+  $("customerModal").classList.remove("show");
+  $("editCustomerModal").classList.add("show");
+}
+async function saveEditCustomer(){
+  const cs=await all("customers"),c=cs.find(x=>x.id===editingCustomerId);
+  if(!c)return;
+  const name=$("editCustName").value.trim(),
+        packageId=Number($("editCustPackage").value),
+        reg=$("editCustRegDate").value,
+        start=$("editCustStartDate").value,
+        due=$("editCustDueDate").value;
+  if(!name||!packageId||!reg||!start||!due){toast("Lengkapi data pelanggan");return}
+  const pkg=(await all("packages")).find(x=>x.id===packageId);
+  if(!pkg){toast("Paket tidak ditemukan");return}
+  const typedPrice=Number($("editCustCustomPrice").value.replace(/\D/g,""));
+  c.name=name;c.packageId=packageId;c.packageName=pkg.name;c.speed=pkg.speed;c.monthlyPrice=typedPrice||pkg.price;c.registrationDate=reg;c.startDate=start;c.firstDueDate=due;c.updatedAt=new Date().toISOString();
+  await put("customers",c);
+  $("editCustomerModal").classList.remove("show");
+  markSaved();
+  await renderAll();
+  toast("Data pelanggan diperbarui");
+}
+
 async function renderPaymentHistory(){const q=$("paymentSearch").value.trim().toLowerCase(),cs=await all("customers"),ps=await all("payments"),rows=ps.map(p=>({p,c:cs.find(c=>c.id===p.customerId)})).filter(x=>x.c&&(!q||x.c.name.toLowerCase().includes(q))).sort((a,b)=>b.p.date.localeCompare(a.p.date));$("paymentHistory").innerHTML="";if(!rows.length){$("paymentHistory").innerHTML='<div class="empty">Belum ada riwayat pembayaran.</div>';return}rows.slice(0,200).forEach(x=>{const{year,month}=parseMonthKey(x.p.period);$("paymentHistory").innerHTML+=`<div class="history-item"><span><b>${x.c.name}</b><br><span class="help">${MONTHS[month]} ${year} · ${x.p.date} · ${x.p.method}</span></span><b>${money(x.p.amount)}</b></div>`})}
 async function renderDashboard(){const cs=(await all("customers")).filter(c=>c.active!==false),ps=await all("payments"),now=new Date(),y=now.getFullYear(),m=now.getMonth();let paid=0,arrears=0,revenue=0;for(const c of cs){if(await statusFor(c,y,m)==="paid")paid++;let has=false,sp=firstBillingPeriod(c);for(let yy=sp.year;yy<=y&&!has;yy++){const from=yy===sp.year?sp.month:0,to=yy===y?m:11;for(let mm=from;mm<=to;mm++)if(await statusFor(c,yy,mm)==="arrears"){has=true;break}}if(has)arrears++}ps.filter(p=>p.period===monthKey(y,m)).forEach(p=>revenue+=Number(p.amount||0));$("dashCustomers").textContent=cs.length;$("dashPaid").textContent=paid;$("dashArrears").textContent=arrears;$("dashRevenue").textContent=money(revenue);$("dashMonth").textContent=`${MONTHS[m]} ${y}`;$("todaySummary").textContent=`${paid} dari ${cs.length} pelanggan sudah melunasi tagihan ${MONTHS[m]}. ${arrears} pelanggan memiliki tagihan yang sudah lewat.`}
 async function renderAll(){await refreshPackages();await renderCustomers();await renderDashboard();await renderPaymentHistory();updateSavedLabel()}
