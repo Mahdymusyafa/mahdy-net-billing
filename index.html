@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f5f8fc">
-  <title>MAHDY-NET Billing</title>
+  <title>MAHDY-NET Billing V7</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -14,7 +14,7 @@
     <div class="brand">
       <div class="logo-frame"><img src="assets/logo-mahdy-net.png" alt="MAHDY-NET"></div>
       <div class="brand-copy">
-        <h1>Billing Manager</h1>
+        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V7</small></h1>
         <span id="localSaveStatus">Auto-save aktif</span>
       </div>
     </div>
@@ -123,9 +123,14 @@
       <div class="page-title">
         <div><span class="eyebrow">TRANSAKSI</span><h2>Riwayat pembayaran</h2></div>
       </div>
-      <label class="searchbox">
-        <span>⌕</span><input id="paymentSearch" placeholder="Cari nama pelanggan...">
-      </label>
+      <div class="filter-card">
+        <label class="searchbox">
+          <span>⌕</span><input id="paymentSearch" placeholder="Cari nama pelanggan...">
+        </label>
+        <div class="filter-row">
+          <label><span>Tahun transaksi</span><select id="paymentYearSelect"></select></label>
+        </div>
+      </div>
       <div class="payment-list" id="paymentList"></div>
     </section>
 
@@ -165,7 +170,7 @@
 
       <div class="safety-note">
         <strong>Pengaman aktif</strong>
-        <p>Data kosong tidak boleh menimpa Drive yang berisi pelanggan. Setiap kirim data ke Drive membuat snapshot lama terlebih dahulu.</p>
+        <p>V7 menyimpan data di folder MAHDY-NET Billing dengan subfolder data, payments, bot, dan backups. Data kosong tidak boleh menimpa Drive yang berisi pelanggan.</p>
       </div>
     </section>
   </main>

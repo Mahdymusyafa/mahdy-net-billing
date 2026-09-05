@@ -1,11 +1,13 @@
 
 const MONTHS=["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 const DB_NAME="mahdy_net_billing_safe";
-const DB_VERSION=1;
+const DB_VERSION=2;
 const CLIENT_ID="1048608388100-1jghinhuoff1necs78hd44h7ql0rjhj7.apps.googleusercontent.com";
 const DRIVE_SCOPE="https://www.googleapis.com/auth/drive.file";
-const MAIN_FILE="mahdy-net-data.json";
+const LEGACY_MAIN_FILE="mahdy-net-data.json";
+const ROOT_FOLDER="MAHDY-NET Billing";
 const BACKUP_PREFIX="MAHDY-NET_Backup_";
+const SNAPSHOT_PREFIX="SNAPSHOT_";
 let db,currentPage=1,selectedYear=new Date().getFullYear(),editingCustomerId=null,editingPackageId=null,paymentCtx=null;
 let googleTokenClient=null,googleAccessToken=null,cloudSnapshot=null;
 
@@ -27,10 +29,18 @@ function openDB(){
     const r=indexedDB.open(DB_NAME,DB_VERSION);
     r.onupgradeneeded=e=>{
       const d=e.target.result;
-      d.createObjectStore("packages",{keyPath:"id",autoIncrement:true});
-      d.createObjectStore("customers",{keyPath:"id",autoIncrement:true});
-      d.createObjectStore("payments",{keyPath:"id",autoIncrement:true});
-      d.createObjectStore("meta",{keyPath:"key"});
+      const tx=e.target.transaction;
+      const packages=d.objectStoreNames.contains("packages")?tx.objectStore("packages"):d.createObjectStore("packages",{keyPath:"id",autoIncrement:true});
+      const customers=d.objectStoreNames.contains("customers")?tx.objectStore("customers"):d.createObjectStore("customers",{keyPath:"id",autoIncrement:true});
+      const payments=d.objectStoreNames.contains("payments")?tx.objectStore("payments"):d.createObjectStore("payments",{keyPath:"id",autoIncrement:true});
+      if(!d.objectStoreNames.contains("meta"))d.createObjectStore("meta",{keyPath:"key"});
+      if(!d.objectStoreNames.contains("current"))d.createObjectStore("current",{keyPath:"customerId"});
+      if(!d.objectStoreNames.contains("summary"))d.createObjectStore("summary",{keyPath:"key"});
+      if(!payments.indexNames.contains("byCustomer"))payments.createIndex("byCustomer","customerId",{unique:false});
+      if(!payments.indexNames.contains("byPeriod"))payments.createIndex("byPeriod","period",{unique:false});
+      if(!payments.indexNames.contains("byCustomerPeriod"))payments.createIndex("byCustomerPeriod",["customerId","period"],{unique:false});
+      if(!payments.indexNames.contains("byDate"))payments.createIndex("byDate","date",{unique:false});
+      if(!customers.indexNames.contains("byCode"))customers.createIndex("byCode","customerCode",{unique:true});
     };
     r.onsuccess=()=>{db=r.result;resolve()};
     r.onerror=()=>reject(r.error);
@@ -42,6 +52,8 @@ function put(store,val){return new Promise((res,rej)=>{const r=db.transaction(st
 function add(store,val){return new Promise((res,rej)=>{const r=db.transaction(store,"readwrite").objectStore(store).add(val);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
 function del(store,key){return new Promise((res,rej)=>{const r=db.transaction(store,"readwrite").objectStore(store).delete(key);r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
 function clearStore(store){return new Promise((res,rej)=>{const r=db.transaction(store,"readwrite").objectStore(store).clear();r.onsuccess=()=>res();r.onerror=()=>rej(r.error)})}
+function indexGetAll(store,indexName,key){return new Promise((res,rej)=>{const r=db.transaction(store,"readonly").objectStore(store).index(indexName).getAll(key);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
+function indexGet(store,indexName,key){return new Promise((res,rej)=>{const r=db.transaction(store,"readonly").objectStore(store).index(indexName).get(key);r.onsuccess=()=>res(r.result);r.onerror=()=>rej(r.error)})}
 async function touchData(){
   const m=await getOne("meta","state")||{key:"state",revision:0};
   m.revision=(m.revision||0)+1;m.modifiedAt=nowISO();
@@ -52,6 +64,19 @@ async function renderLocalStatus(){
   const s=await getState();
   $("localSaveStatus").textContent=s.modifiedAt?"Tersimpan otomatis · "+new Intl.DateTimeFormat("id-ID",{hour:"2-digit",minute:"2-digit"}).format(new Date(s.modifiedAt)):"Tersimpan otomatis";
 }
+function customerCodeNumber(code){const m=String(code||"").match(/^C(\d+)$/i);return m?Number(m[1]):0}
+function formatCustomerCode(n){return "C"+String(n).padStart(6,"0")}
+async function ensureCustomerCodes(){
+  const cs=(await all("customers")).sort((a,b)=>Number(a.id)-Number(b.id));
+  let seq=0,changed=false;
+  for(const c of cs)seq=Math.max(seq,customerCodeNumber(c.customerCode));
+  for(const c of cs){if(!c.customerCode){c.customerCode=formatCustomerCode(++seq);await put("customers",c);changed=true}}
+  const m=await getOne("meta","customerSeq")||{key:"customerSeq",value:0};m.value=Math.max(Number(m.value||0),seq);await put("meta",m);
+  if(changed){const st=await getState();if(!st.modifiedAt)await touchData()}
+}
+async function nextCustomerCode(){
+  const m=await getOne("meta","customerSeq")||{key:"customerSeq",value:0};m.value=Number(m.value||0)+1;await put("meta",m);return formatCustomerCode(m.value)
+}
 
 function firstBillPeriod(c){const d=new Date(c.firstBillDate+"T00:00:00");return{year:d.getFullYear(),month:d.getMonth()}}
 function periodCompare(y,m,y2,m2){return y===y2?m-m2:y-y2}
@@ -60,7 +85,31 @@ function dueDate(c,y,m){
   return new Date(y,m,Math.min(day,last));
 }
 async function paymentFor(customerId,period){
-  return (await all("payments")).find(p=>p.customerId===customerId&&p.period===period)||null;
+  return await indexGet("payments","byCustomerPeriod",[customerId,period])||null;
+}
+async function paymentsForCustomer(customerId){return await indexGetAll("payments","byCustomer",customerId)}
+async function paymentsForPeriod(period){return await indexGetAll("payments","byPeriod",period)}
+async function paymentsForCustomerYear(customerId,year){return (await paymentsForCustomer(customerId)).filter(p=>String(p.period||"").startsWith(year+"-"))}
+function previousMonthKey(y,m){const d=new Date(y,m-1,1);return monthKey(d.getFullYear(),d.getMonth())}
+function invoiceId(c,y,m){return `${c.customerCode||("C"+c.id)}-${monthKey(y,m)}`}
+async function buildCurrentRecord(c,now=new Date()){
+  const y=now.getFullYear(),m=now.getMonth(),billingPeriod=monthKey(y,m),ps=await paymentsForCustomer(c.id),paidSet=new Set(ps.map(p=>p.period));
+  const first=firstBillPeriod(c);let arrears=[];
+  for(let yy=first.year;yy<=y;yy++){const from=yy===first.year?first.month:0,to=yy===y?m:11;for(let mm=from;mm<=to;mm++){const per=monthKey(yy,mm);if(paidSet.has(per))continue;const d=dueDate(c,yy,mm);d.setHours(0,0,0,0);const t=new Date(now);t.setHours(0,0,0,0);if(t>d)arrears.push(per)}}
+  const payment=ps.find(p=>p.period===billingPeriod)||null;
+  const status=payment?"paid":await statusFor(c,y,m);const bill=dueDate(c,y,m);
+  return{customerId:c.id,customerCode:c.customerCode,name:c.name,billingPeriod,usagePeriod:previousMonthKey(y,m),invoiceId:invoiceId(c,y,m),billingDate:ymdLocal(bill),amount:Number(c.monthlyPrice||0),status,paymentAmount:payment?Number(payment.amount||0):0,paymentDate:payment?.date||null,arrearsCount:arrears.length,arrearsPeriods:arrears,updatedAt:nowISO()};
+}
+async function refreshCurrentForCustomer(customerId){const c=await getOne("customers",customerId);if(!c||c.active===false){await del("current",customerId);return}await put("current",await buildCurrentRecord(c))}
+async function rebuildCurrentSnapshot(force=false){
+  const today=ymdLocal(),meta=await getOne("meta","currentSnapshot"),cs=(await all("customers")).filter(c=>c.active!==false),cur=await all("current");
+  if(!force&&meta?.date===today&&cur.length===cs.length)return;
+  await clearStore("current");for(const c of cs)await put("current",await buildCurrentRecord(c));
+  await put("meta",{key:"currentSnapshot",date:today,updatedAt:nowISO()});await rebuildSummary();
+}
+async function rebuildSummary(){
+  const rows=await all("current");let paid=0,issued=0,arrearsCustomers=0,revenue=0;for(const r of rows){if(r.status==="paid"){paid++;revenue+=Number(r.paymentAmount||0)}if(r.status==="issued")issued++;if(r.arrearsCount>0)arrearsCustomers++}
+  const x={key:"current",date:ymdLocal(),customers:rows.length,paid,issued,arrearsCustomers,revenue,updatedAt:nowISO()};await put("summary",x);return x
 }
 async function statusFor(c,y,m){
   const first=firstBillPeriod(c);
@@ -147,9 +196,9 @@ async function saveCustomer(){
     Object.assign(c,{name,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,updatedAt:nowISO()});
     await put("customers",c);
   }else{
-    await add("customers",{name,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,active:true,createdAt:nowISO()});
+    await add("customers",{customerCode:await nextCustomerCode(),name,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,active:true,createdAt:nowISO()});
   }
-  await touchData();closeModal("customerFormModal");await renderAll();toast("Pelanggan disimpan");
+  await touchData();const targetId=editingCustomerId||(await all("customers")).slice(-1)[0]?.id;if(targetId)await refreshCurrentForCustomer(targetId);await rebuildSummary();closeModal("customerFormModal");await renderAll();toast("Pelanggan disimpan");
 }
 
 async function renderCustomerTable(){
@@ -160,34 +209,31 @@ async function renderCustomerTable(){
   const size=Number($("pageSize").value),pages=Math.max(1,Math.ceil(customers.length/size));currentPage=Math.min(currentPage,pages);
   const start=(currentPage-1)*size,page=customers.slice(start,start+size),body=$("customerRows");body.innerHTML="";
   for(let i=0;i<page.length;i++){
-    const c=page[i],row=document.createElement("tr");row.innerHTML=`<td>${start+i+1}</td><td><span class="customer-link" data-id="${c.id}">${c.name}</span><div class="row-meta">${c.speed} · ${money(c.monthlyPrice)}</div></td>`;
+    const c=page[i],paidSet=new Set((await paymentsForCustomerYear(c.id,selectedYear)).map(p=>p.period)),row=document.createElement("tr");
+    row.innerHTML=`<td>${start+i+1}</td><td><span class="customer-link" data-id="${c.id}">${c.name}</span><div class="row-meta">${c.customerCode} · ${c.speed} · ${money(c.monthlyPrice)}</div></td>`;
     for(let m=0;m<12;m++){
-      const td=document.createElement("td"),s=await statusFor(c,selectedYear,m),b=document.createElement("button");
-      b.className=`month-btn ${s}`;b.textContent=statusLabel(s);b.dataset.cid=c.id;b.dataset.month=m;
-      if(s==="future"||s==="inactive")b.disabled=true; else b.addEventListener("click",()=>openPayment(c.id,m));
-      td.appendChild(b);row.appendChild(td);
+      const td=document.createElement("td"),period=monthKey(selectedYear,m);let st;
+      const first=firstBillPeriod(c);
+      if(periodCompare(selectedYear,m,first.year,first.month)<0)st="inactive";
+      else if(paidSet.has(period))st="paid";
+      else{const today=new Date();today.setHours(0,0,0,0);const due=dueDate(c,selectedYear,m);due.setHours(0,0,0,0);st=today<due?"future":today.getTime()===due.getTime()?"issued":"arrears"}
+      const b=document.createElement("button");b.className=`month-btn ${st}`;b.textContent=statusLabel(st);b.dataset.cid=c.id;b.dataset.month=m;
+      if(st==="future"||st==="inactive")b.disabled=true;else b.addEventListener("click",()=>openPayment(c.id,m));td.appendChild(b);row.appendChild(td);
     }
     body.appendChild(row);
   }
   body.querySelectorAll(".customer-link").forEach(e=>e.addEventListener("click",()=>openCustomerDetail(Number(e.dataset.id))));
   $("pageInfo").textContent=`Menampilkan ${customers.length?start+1:0}–${Math.min(start+size,customers.length)} dari ${customers.length} data`;
-  const pb=$("pageButtons");pb.innerHTML="";
-  for(let p=1;p<=pages;p++){const b=document.createElement("button");b.className="page-btn"+(p===currentPage?" active":"");b.textContent=p;b.addEventListener("click",()=>{currentPage=p;renderCustomerTable()});pb.appendChild(b)}
+  const pb=$("pageButtons");pb.innerHTML="";const maxButtons=7,from=Math.max(1,Math.min(currentPage-3,pages-maxButtons+1)),to=Math.min(pages,from+maxButtons-1);
+  for(let p=from;p<=to;p++){const b=document.createElement("button");b.className="page-btn"+(p===currentPage?" active":"");b.textContent=p;b.addEventListener("click",()=>{currentPage=p;renderCustomerTable()});pb.appendChild(b)}
   await renderCustomerFocus(customers);
 }
 async function renderCustomerFocus(matches){
   const box=$("customerFocus");box.innerHTML="";
   if(!$("customerSearch").value.trim()||matches.length!==1)return;
-  const c=matches[0],now=new Date(),s=await statusFor(c,now.getFullYear(),now.getMonth());
-  let arrears=[];
-  const first=firstBillPeriod(c);
-  for(let y=first.year;y<=now.getFullYear();y++){
-    const from=y===first.year?first.month:0,to=y===now.getFullYear()?now.getMonth():11;
-    for(let m=from;m<=to;m++)if(await statusFor(c,y,m)==="arrears")arrears.push(`${MONTHS[m]} ${y}`);
-  }
-  box.innerHTML=`<div class="focus-card"><h3>${c.name}</h3><div class="focus-meta">${c.packageName} · ${c.speed} · ${money(c.monthlyPrice)}</div><div class="focus-stats"><div class="focus-stat"><span>Bulan ini</span><b>${statusLabel(s)}</b></div><div class="focus-stat"><span>Tunggakan</span><b>${arrears.length} bulan</b></div><div class="focus-stat"><span>Rincian</span><b>${arrears.length?arrears.join(", "):"Tidak ada"}</b></div></div></div>`;
+  const c=matches[0],now=new Date(),cur=await getOne("current",c.id),s=cur?.status||await statusFor(c,now.getFullYear(),now.getMonth()),arrears=cur?.arrearsPeriods||[];
+  box.innerHTML=`<div class="focus-card"><h3>${c.name}</h3><div class="focus-meta">${c.customerCode} · ${c.packageName} · ${c.speed} · ${money(c.monthlyPrice)}</div><div class="focus-stats"><div class="focus-stat"><span>Bulan ini</span><b>${statusLabel(s)}</b></div><div class="focus-stat"><span>Tunggakan</span><b>${arrears.length} bulan</b></div><div class="focus-stat"><span>Rincian</span><b>${arrears.length?arrears.map(k=>{const x=parsePeriod(k);return MONTHS[x.month]+" "+x.year}).join(", "):"Tidak ada"}</b></div></div></div>`;
 }
-
 async function openPayment(customerId,month){
   const c=(await all("customers")).find(x=>x.id===customerId);if(!c)return;
   const period=monthKey(selectedYear,month),existing=await paymentFor(customerId,period);paymentCtx={customer:c,period,existing};
@@ -199,172 +245,142 @@ async function savePayment(){
   if(!paymentCtx)return;const amount=Number($("payAmount").value.replace(/\D/g,""));if(!amount||!$("payDate").value){toast("Lengkapi pembayaran");return}
   if(paymentCtx.existing){Object.assign(paymentCtx.existing,{amount,date:$("payDate").value,method:$("payMethod").value,note:$("payNote").value.trim(),updatedAt:nowISO()});await put("payments",paymentCtx.existing)}
   else await add("payments",{customerId:paymentCtx.customer.id,period:paymentCtx.period,amount,date:$("payDate").value,method:$("payMethod").value,note:$("payNote").value.trim(),createdAt:nowISO()});
-  await touchData();closeModal("paymentModal");await renderAll();toast("Pembayaran disimpan");
+  await touchData();await refreshCurrentForCustomer(paymentCtx.customer.id);await rebuildSummary();closeModal("paymentModal");await renderAll();toast("Pembayaran disimpan");
 }
 async function deletePayment(){
-  if(!paymentCtx?.existing)return;if(confirm("Batalkan catatan pembayaran ini?")){await del("payments",paymentCtx.existing.id);await touchData();closeModal("paymentModal");await renderAll()}
+  if(!paymentCtx?.existing)return;if(confirm("Batalkan catatan pembayaran ini?")){const cid=paymentCtx.customer.id;await del("payments",paymentCtx.existing.id);await touchData();await refreshCurrentForCustomer(cid);await rebuildSummary();closeModal("paymentModal");await renderAll()}
 }
 async function openCustomerDetail(id){
   editingCustomerId=id;const c=(await all("customers")).find(x=>x.id===id);if(!c)return;
   $("detailCustomerName").textContent=c.name;
   $("detailCustomerInfo").innerHTML=`<div class="detail-grid"><div class="detail-cell"><span>Paket</span><b>${c.packageName} · ${c.speed}</b></div><div class="detail-cell"><span>Tarif</span><b>${money(c.monthlyPrice)}</b></div><div class="detail-cell"><span>Registrasi</span><b>${c.registrationDate}</b></div><div class="detail-cell"><span>Mulai layanan</span><b>${c.startDate}</b></div><div class="detail-cell"><span>Tagihan pertama</span><b>${c.firstBillDate}</b></div></div>`;
-  const ps=(await all("payments")).filter(p=>p.customerId===id).sort((a,b)=>b.period.localeCompare(a.period)),hist=$("detailPaymentHistory");hist.innerHTML="";
+  const ps=(await paymentsForCustomer(id)).sort((a,b)=>b.period.localeCompare(a.period)),hist=$("detailPaymentHistory");hist.innerHTML="";
   if(!ps.length)hist.innerHTML='<div class="empty-state">Belum ada pembayaran.</div>';
   ps.forEach(p=>{const {year,month}=parsePeriod(p.period),d=document.createElement("div");d.className="history-row";d.innerHTML=`<div><b>${MONTHS[month]} ${year}</b><small>${p.date} · ${p.method}</small></div><b>${money(p.amount)}</b>`;hist.appendChild(d)});
   openModal("customerDetailModal");
 }
 async function renderPayments(){
-  const q=$("paymentSearch").value.trim().toLowerCase(),cs=await all("customers"),ps=(await all("payments")).sort((a,b)=>b.date.localeCompare(a.date)),list=$("paymentList");list.innerHTML="";
-  const rows=ps.map(p=>({p,c:cs.find(c=>c.id===p.customerId)})).filter(x=>x.c&&x.c.name.toLowerCase().includes(q));
-  if(!rows.length){list.innerHTML='<div class="empty-state">Belum ada pembayaran.</div>';return}
-  rows.forEach(({p,c})=>{const {year,month}=parsePeriod(p.period),d=document.createElement("div");d.className="payment-item";d.innerHTML=`<div><b>${c.name}</b><small>${MONTHS[month]} ${year} · ${p.date} · ${p.method}</small></div><b>${money(p.amount)}</b>`;list.appendChild(d)});
+  const q=$("paymentSearch").value.trim().toLowerCase(),year=Number($("paymentYearSelect")?.value||new Date().getFullYear()),cs=await all("customers"),cmap=new Map(cs.map(c=>[c.id,c])),ps=[];
+  for(let m=0;m<12;m++)ps.push(...await paymentsForPeriod(monthKey(year,m)));ps.sort((a,b)=>String(b.date).localeCompare(String(a.date)));
+  const list=$("paymentList");list.innerHTML="";const rows=ps.map(p=>({p,c:cmap.get(p.customerId)})).filter(x=>x.c&&x.c.name.toLowerCase().includes(q));
+  if(!rows.length){list.innerHTML='<div class="empty-state">Belum ada pembayaran pada tahun ini.</div>';return}
+  rows.slice(0,250).forEach(({p,c})=>{const {year,month}=parsePeriod(p.period),d=document.createElement("div");d.className="payment-item";d.innerHTML=`<div><b>${c.name}</b><small>${c.customerCode} · ${MONTHS[month]} ${year} · ${p.date} · ${p.method}</small></div><b>${money(p.amount)}</b>`;list.appendChild(d)});
+  if(rows.length>250){const d=document.createElement("div");d.className="empty-state";d.textContent=`Menampilkan 250 transaksi terbaru dari ${rows.length} transaksi tahun ${year}. Gunakan pencarian untuk mempersempit.`;list.appendChild(d)}
 }
 async function renderHome(){
-  const cs=(await all("customers")).filter(c=>c.active!==false),ps=await all("payments"),now=new Date(),y=now.getFullYear(),m=now.getMonth();
-  let paid=0,issued=0,arrearsCustomers=0,revenue=0,attention=[];
-  for(const c of cs){
-    const s=await statusFor(c,y,m);if(s==="paid")paid++;if(s==="issued"){issued++;attention.push({c,s})}
-    let has=false;const first=firstBillPeriod(c);
-    for(let yy=first.year;yy<=y&&!has;yy++){const from=yy===first.year?first.month:0,to=yy===y?m:11;for(let mm=from;mm<=to;mm++)if(await statusFor(c,yy,mm)==="arrears"){has=true;break}}
-    if(has){arrearsCustomers++;if(!attention.some(x=>x.c.id===c.id))attention.push({c,s:"arrears"})}
-  }
-  ps.filter(p=>p.period===monthKey(y,m)).forEach(p=>revenue+=Number(p.amount||0));
-  $("homeMonthLabel").textContent=`${MONTHS[m]} ${y}`;$("statCustomers").textContent=cs.length;$("statPaid").textContent=paid;$("statIssued").textContent=issued;$("statArrears").textContent=arrearsCustomers;$("statRevenue").textContent=money(revenue);
-  $("homeSummary").textContent=cs.length?`${paid} pelanggan sudah lunas. ${arrearsCustomers} pelanggan perlu diperiksa.`:"Belum ada data pelanggan.";
-  const list=$("attentionList");list.innerHTML="";
+  await rebuildCurrentSnapshot();const rows=await all("current"),sum=await getOne("summary","current")||await rebuildSummary(),now=new Date(),y=now.getFullYear(),m=now.getMonth();
+  $("homeMonthLabel").textContent=`${MONTHS[m]} ${y}`;$("statCustomers").textContent=sum.customers||0;$("statPaid").textContent=sum.paid||0;$("statIssued").textContent=sum.issued||0;$("statArrears").textContent=sum.arrearsCustomers||0;$("statRevenue").textContent=money(sum.revenue||0);
+  $("homeSummary").textContent=sum.customers?`${sum.paid} pelanggan sudah lunas. ${sum.arrearsCustomers} pelanggan perlu diperiksa.`:"Belum ada data pelanggan.";
+  const attention=rows.filter(r=>r.status==="issued"||r.arrearsCount>0).sort((a,b)=>b.arrearsCount-a.arrearsCount),list=$("attentionList");list.innerHTML="";
   if(!attention.length){list.innerHTML='<div class="empty-state">Tidak ada tagihan yang perlu perhatian.</div>';return}
-  attention.slice(0,8).forEach(({c,s})=>{const d=document.createElement("div");d.className="attention-item";d.innerHTML=`<div><b>${c.name}</b><small>${c.packageName} · ${money(c.monthlyPrice)}</small></div><span class="status-pill ${s==="arrears"?"red":"amber"}">${s==="arrears"?"Tunggak":"Tagihan terbit"}</span>`;d.addEventListener("click",()=>{showView("customersView");$("customerSearch").value=c.name;currentPage=1;renderCustomerTable()});list.appendChild(d)});
+  attention.slice(0,8).forEach(r=>{const d=document.createElement("div");d.className="attention-item";d.innerHTML=`<div><b>${r.name}</b><small>${r.customerCode} · ${money(r.amount)}</small></div><span class="status-pill ${r.arrearsCount>0?"red":"amber"}">${r.arrearsCount>0?"Tunggak":"Tagihan terbit"}</span>`;d.addEventListener("click",async()=>{const c=await getOne("customers",r.customerId);showView("customersView");$("customerSearch").value=c?.name||r.name;currentPage=1;renderCustomerTable()});list.appendChild(d)});
 }
+async function buildBotStatus(){
+  const state=await getState(),rows=(await all("current")).map(r=>({invoiceId:r.invoiceId,customerId:r.customerCode,name:r.name,billingPeriod:r.billingPeriod,usagePeriod:r.usagePeriod,billingDate:r.billingDate,amount:r.amount,status:r.status==="paid"?"paid":"unpaid",paymentDate:r.paymentDate||null}));
+  return{schema:1,app:"MAHDY-NET Billing",generatedAt:nowISO(),revision:state.revision||0,customers:rows};
+}
+async function buildSummaryFile(){const x=await getOne("summary","current")||await rebuildSummary();return{schema:1,generatedAt:nowISO(),current:x}}
 async function renderAll(){await renderPackages();await renderCustomerTable();await renderPayments();await renderHome();await renderLocalStatus()}
 
 async function exportData(){
-  const state=await getState();
-  return{schema:1,app:"MAHDY-NET Billing",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments")}
+  const state=await getState();return{schema:2,app:"MAHDY-NET Billing V7",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments")}
 }
 function summary(data){return{customers:Array.isArray(data?.customers)?data.customers.length:0,payments:Array.isArray(data?.payments)?data.payments.length:0,packages:Array.isArray(data?.packages)?data.packages.length:0,modifiedAt:data?.modifiedAt||null,revision:data?.revision||0}}
 async function importData(data,{mark=true}={}){
   if(!data||!Array.isArray(data.packages)||!Array.isArray(data.customers)||!Array.isArray(data.payments))throw new Error("Format backup tidak valid");
-  await clearStore("packages");await clearStore("customers");await clearStore("payments");
+  await clearStore("packages");await clearStore("customers");await clearStore("payments");await clearStore("current");await clearStore("summary");
   for(const x of data.packages)await put("packages",x);for(const x of data.customers)await put("customers",x);for(const x of data.payments)await put("payments",x);
-  await put("meta",{key:"state",revision:Number(data.revision||0),modifiedAt:data.modifiedAt||nowISO()});
-  if(mark)await renderAll();
+  await put("meta",{key:"state",revision:Number(data.revision||0),modifiedAt:data.modifiedAt||nowISO()});await ensureCustomerCodes();await rebuildCurrentSnapshot(true);if(mark)await renderAll();
+}
+function groupPaymentsByYear(payments){const out={};for(const p of payments){const y=String(p.period||"").slice(0,4);if(!/^\d{4}$/.test(y))continue;(out[y]||(out[y]=[])).push(p)}return out}
+async function buildBundle(){
+  await rebuildCurrentSnapshot();const state=await getState(),packages=await all("packages"),customers=await all("customers"),payments=await all("payments"),years=groupPaymentsByYear(payments),summaryFile=await buildSummaryFile(),bot=await buildBotStatus();
+  const manifest={schema:2,app:"MAHDY-NET Billing V7",revision:state.revision||0,modifiedAt:state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length},paymentYears:Object.keys(years).sort()};
+  return{manifest,packages:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:packages},customers:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:customers},current:{schema:1,generatedAt:nowISO(),items:await all("current")},summary:summaryFile,paymentYears:years,bot};
 }
 
 function initGoogle(){
   if(!window.google?.accounts?.oauth2){toast("Google belum siap, coba lagi beberapa detik");return false}
-  googleTokenClient=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:DRIVE_SCOPE,callback:r=>{
-    if(r.error){alert("Login Google gagal: "+r.error);return}
-    googleAccessToken=r.access_token;updateDriveUI();toast("Google Drive terhubung");
-  }});
-  return true;
+  googleTokenClient=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:DRIVE_SCOPE,callback:r=>{if(r.error){alert("Login Google gagal: "+r.error);return}googleAccessToken=r.access_token;updateDriveUI();toast("Google Drive terhubung")}});return true;
 }
 function connectDrive(){if(initGoogle())googleTokenClient.requestAccessToken({prompt:""})}
 function disconnectDrive(){googleAccessToken=null;cloudSnapshot=null;updateDriveUI()}
-function updateDriveUI(){
-  const ok=!!googleAccessToken;$("driveBadge").classList.toggle("ok",ok);$("driveBadge").querySelector("span").textContent=ok?"Drive terhubung":"Drive belum terhubung";
-  $("driveStatusText").textContent=ok?"Terhubung dan siap digunakan":"Belum terhubung";$("connectDriveBtn").classList.toggle("hidden",ok);$("disconnectDriveBtn").classList.toggle("hidden",!ok);
-}
-async function driveFetch(url,opts={}){
-  if(!googleAccessToken)throw new Error("Hubungkan Google Drive dulu");
-  const r=await fetch(url,{...opts,headers:{Authorization:"Bearer "+googleAccessToken,...(opts.headers||{})}});
-  if(!r.ok){if(r.status===401){googleAccessToken=null;updateDriveUI()}throw new Error(await r.text())}return r;
-}
-async function listNamed(name,contains=false){
-  const query=contains?`name contains '${name}' and trashed=false`:`name='${name}' and trashed=false`;
-  const r=await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&fields=files(id,name,modifiedTime,size)&pageSize=50`);
-  return (await r.json()).files||[];
-}
+function updateDriveUI(){const ok=!!googleAccessToken;$("driveBadge").classList.toggle("ok",ok);$("driveBadge").querySelector("span").textContent=ok?"Drive terhubung":"Drive belum terhubung";$("driveStatusText").textContent=ok?"Terhubung · struktur V7 siap":"Belum terhubung";$("connectDriveBtn").classList.toggle("hidden",ok);$("disconnectDriveBtn").classList.toggle("hidden",!ok)}
+async function driveFetch(url,opts={}){if(!googleAccessToken)throw new Error("Hubungkan Google Drive dulu");const r=await fetch(url,{...opts,headers:{Authorization:"Bearer "+googleAccessToken,...(opts.headers||{})}});if(!r.ok){if(r.status===401){googleAccessToken=null;updateDriveUI()}throw new Error(await r.text())}return r}
+function qEscape(v){return String(v).replace(/\\/g,"\\\\").replace(/'/g,"\\'")}
+async function driveList(query,fields="files(id,name,mimeType,parents,modifiedTime,size)",pageSize=100){const r=await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&fields=${encodeURIComponent(fields)}&pageSize=${pageSize}`);return (await r.json()).files||[]}
+async function findFolder(name,parentId=null){let q=`name='${qEscape(name)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;if(parentId)q+=` and '${qEscape(parentId)}' in parents`;return (await driveList(q))[0]||null}
+async function createFolder(name,parentId=null){const body={name,mimeType:"application/vnd.google-apps.folder"};if(parentId)body.parents=[parentId];return (await driveFetch("https://www.googleapis.com/drive/v3/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json()}
+async function ensureFolder(name,parentId=null){return await findFolder(name,parentId)||await createFolder(name,parentId)}
+async function ensureDriveStructure(){const root=await ensureFolder(ROOT_FOLDER),data=await ensureFolder("data",root.id),payments=await ensureFolder("payments",root.id),bot=await ensureFolder("bot",root.id),backups=await ensureFolder("backups",root.id);return{root,data,payments,bot,backups}}
+async function findJson(name,parentId){const q=`name='${qEscape(name)}' and '${qEscape(parentId)}' in parents and trashed=false`;return (await driveList(q))[0]||null}
 async function downloadDrive(id){return (await driveFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`)).json()}
-async function createDriveFile(name,data){
-  const meta={name,mimeType:"application/json"},boundary="mahdy_"+Date.now();
-  const body=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}\r\n--${boundary}--`;
-  const r=await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",{method:"POST",headers:{"Content-Type":"multipart/related; boundary="+boundary},body});return r.json();
+async function createJson(name,data,parentId){const meta={name,mimeType:"application/json",parents:[parentId]},boundary="mahdy_"+Date.now()+Math.random().toString(36).slice(2);const body=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}\r\n--${boundary}--`;return (await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",{method:"POST",headers:{"Content-Type":"multipart/related; boundary="+boundary},body})).json()}
+async function updateJson(id,data){return (await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)})).json()}
+async function upsertJson(name,data,parentId){const f=await findJson(name,parentId);return f?await updateJson(f.id,data):await createJson(name,data,parentId)}
+async function listChildren(parentId){return await driveList(`'${qEscape(parentId)}' in parents and trashed=false`)}
+async function copyFile(fileId,name,parentId){return (await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}/copy`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,parents:[parentId]})})).json()}
+async function findLegacyMain(){const q=`name='${qEscape(LEGACY_MAIN_FILE)}' and trashed=false`;return (await driveList(q))[0]||null}
+async function getCloudHeader(){
+  const root=await findFolder(ROOT_FOLDER);if(root){const data=await findFolder("data",root.id);if(data){const mf=await findJson("manifest.json",data.id);if(mf){const manifest=await downloadDrive(mf.id);return{kind:"v7",root,data,manifest,structure:null}}}}
+  const legacy=await findLegacyMain();if(legacy){const data=await downloadDrive(legacy.id);return{kind:"legacy",file:legacy,data,manifest:{schema:1,revision:data.revision||0,modifiedAt:data.modifiedAt||null,counts:summary(data),paymentYears:[...new Set((data.payments||[]).map(p=>String(p.period||"").slice(0,4)).filter(y=>/^\d{4}$/.test(y)))]}}}
+  return{kind:"empty",manifest:null};
 }
-async function updateDriveFile(id,data){return (await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)})).json()}
-async function getCloudMain(){
-  const files=await listNamed(MAIN_FILE);if(!files.length)return{file:null,data:null};
-  return{file:files[0],data:await downloadDrive(files[0].id)};
+async function readV7Bundle(header){
+  const st=await ensureDriveStructure(),read=async(name,folder)=>{const f=await findJson(name,folder.id);return f?await downloadDrive(f.id):null},manifest=header.manifest||await read("manifest.json",st.data),packages=await read("packages.json",st.data),customers=await read("customers.json",st.data),payments=[];
+  for(const y of manifest?.paymentYears||[]){const d=await read(`${y}.json`,st.payments);if(Array.isArray(d?.items))payments.push(...d.items);else if(Array.isArray(d))payments.push(...d)}
+  return{schema:2,app:"MAHDY-NET Billing V7",revision:manifest?.revision||0,modifiedAt:manifest?.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
 }
-async function createSafetyBackup(data,label="AUTO"){
-  if(!data)return;
-  const stamp=new Date().toISOString().replace(/[:.]/g,"-");
-  await createDriveFile(`${BACKUP_PREFIX}${label}_${stamp}.json`,data);
+async function createStructuredSafetyBackup(st,label="AUTO"){
+  const year=String(new Date().getFullYear()),yearFolder=await ensureFolder(year,st.backups.id),stamp=new Date().toISOString().replace(/[:.]/g,"-"),snap=await createFolder(`${SNAPSHOT_PREFIX}${label}_${stamp}`,yearFolder.id);
+  for(const [prefix,folder] of [["data",st.data],["payments",st.payments],["bot",st.bot]]){for(const f of await listChildren(folder.id)){if(f.mimeType==="application/vnd.google-apps.folder")continue;await copyFile(f.id,`${prefix}__${f.name}`,snap.id)}}
+  await createJson("snapshot-info.json",{schema:1,label,createdAt:nowISO()},snap.id);return snap;
+}
+async function writeBundle(bundle,{backup=true}={}){
+  const st=await ensureDriveStructure();const existingManifest=await findJson("manifest.json",st.data.id);if(backup&&existingManifest)await createStructuredSafetyBackup(st,"SEBELUM_KIRIM");
+  const legacy=await findLegacyMain();if(backup&&!existingManifest&&legacy){const yearFolder=await ensureFolder(String(new Date().getFullYear()),st.backups.id),snap=await createFolder(`${SNAPSHOT_PREFIX}MIGRASI_V6_${new Date().toISOString().replace(/[:.]/g,"-")}`,yearFolder.id);await copyFile(legacy.id,"legacy__mahdy-net-data.json",snap.id)}
+  await upsertJson("packages.json",bundle.packages,st.data.id);await upsertJson("customers.json",bundle.customers,st.data.id);await upsertJson("current.json",bundle.current,st.data.id);await upsertJson("summary.json",bundle.summary,st.data.id);
+  for(const [y,items] of Object.entries(bundle.paymentYears))await upsertJson(`${y}.json`,{schema:1,year:Number(y),revision:bundle.manifest.revision,modifiedAt:bundle.manifest.modifiedAt,items},st.payments.id);
+  await upsertJson("wa-status.json",bundle.bot,st.bot.id);await upsertJson("manifest.json",bundle.manifest,st.data.id);return st;
 }
 async function openSafeSync(){
   if(!googleAccessToken){toast("Hubungkan Google Drive dulu");showView("dataView");return}
-  try{
-    const local=await exportData(),cloud=await getCloudMain();cloudSnapshot=cloud;
-    const ls=summary(local),cs=summary(cloud.data);
+  try{const local=await exportData(),ls=summary(local),cloud=await getCloudHeader();cloudSnapshot=cloud;const cm=cloud.manifest,cc=cm?.counts||{};
     $("localCustomerCount").textContent=`${ls.customers} pelanggan`;$("localPaymentCount").textContent=`${ls.payments} pembayaran`;$("localModified").textContent=ls.modifiedAt?new Date(ls.modifiedAt).toLocaleString("id-ID"):"Belum ada perubahan";
-    if(!cloud.data){$("cloudCustomerCount").textContent="Belum ada file";$("cloudPaymentCount").textContent="—";$("cloudModified").textContent="—"}
-    else{$("cloudCustomerCount").textContent=`${cs.customers} pelanggan`;$("cloudPaymentCount").textContent=`${cs.payments} pembayaran`;$("cloudModified").textContent=cs.modifiedAt?new Date(cs.modifiedAt).toLocaleString("id-ID"):"Tanpa tanggal"}
-    const w=$("syncWarning"),push=$("pushDriveBtn"),pull=$("pullDriveBtn");w.className="sync-warning";push.disabled=false;pull.disabled=!cloud.data;
-    if(ls.customers===0&&cs.customers>0){
-      w.classList.add("danger");w.textContent="HP ini kosong tetapi Drive berisi data. Mengirim data HP DIBLOKIR. Ambil data dari Drive.";push.disabled=true;
-    }else if(!cloud.data&&ls.customers>0){
-      w.classList.add("good");w.textContent="Drive belum punya data utama. Anda bisa mengirim data HP sebagai data utama pertama.";
-    }else if(ls.customers>0&&cs.customers===0){
-      w.classList.add("danger");w.textContent="Drive terlihat kosong. Sebelum mengirim, aplikasi akan membuat snapshot Drive jika ada file lama.";
-    }else{
-      w.textContent="Pilih arah dengan sengaja. Tidak ada data yang akan ditimpa otomatis.";
-    }
+    if(cloud.kind==="empty"){$("cloudCustomerCount").textContent="Belum ada data";$("cloudPaymentCount").textContent="—";$("cloudModified").textContent="—"}else{$("cloudCustomerCount").textContent=`${cc.customers||0} pelanggan`;$("cloudPaymentCount").textContent=`${cc.payments||0} pembayaran · ${cloud.kind==="v7"?"V7":"V6 lama"}`;$("cloudModified").textContent=cm.modifiedAt?new Date(cm.modifiedAt).toLocaleString("id-ID"):"Tanpa tanggal"}
+    const w=$("syncWarning"),push=$("pushDriveBtn"),pull=$("pullDriveBtn");w.className="sync-warning";push.disabled=false;pull.disabled=cloud.kind==="empty";
+    if(ls.customers===0&&(cc.customers||0)>0){w.classList.add("danger");w.textContent="HP ini kosong tetapi Drive berisi data. Mengirim data HP DIBLOKIR. Ambil data dari Drive.";push.disabled=true}else if(cloud.kind==="legacy"){w.classList.add("good");w.textContent="Data V6 lama ditemukan. Ambil tetap didukung, atau Kirim untuk migrasi aman ke struktur folder V7. File V6 lama tidak dihapus."}else if(cloud.kind==="empty"&&ls.customers>0){w.classList.add("good");w.textContent="Belum ada struktur V7. Kirim akan membuat folder MAHDY-NET Billing beserta subfolder otomatis."}else w.textContent="Pilih arah dengan sengaja. Tidak ada data yang ditimpa otomatis.";
     openModal("syncModal");
   }catch(e){alert("Gagal membaca Drive: "+e.message)}
 }
 async function pullFromDrive(){
-  if(!cloudSnapshot?.data)return;
-  const local=await exportData(),ls=summary(local),cs=summary(cloudSnapshot.data);
-  const msg=`Ambil data Drive?\n\nHP: ${ls.customers} pelanggan, ${ls.payments} pembayaran\nDrive: ${cs.customers} pelanggan, ${cs.payments} pembayaran\n\nData HP saat ini akan diganti.`;
-  if(!confirm(msg))return;
-  // Always download a local JSON safety copy before replacing non-empty local data.
-  if(ls.customers||ls.payments)downloadJson(local,`MAHDY-NET_SEBELUM_AMBIL_DRIVE_${ymdLocal()}.json`);
-  await importData(cloudSnapshot.data);closeModal("syncModal");toast("Data Drive sudah diambil");
+  if(!cloudSnapshot||cloudSnapshot.kind==="empty")return;const local=await exportData(),ls=summary(local);let cloudData;
+  try{cloudData=cloudSnapshot.kind==="legacy"?cloudSnapshot.data:await readV7Bundle(cloudSnapshot)}catch(e){alert("Gagal membaca data Drive: "+e.message);return}const cs=summary(cloudData);
+  if(!confirm(`Ambil data Drive?\n\nHP: ${ls.customers} pelanggan, ${ls.payments} pembayaran\nDrive: ${cs.customers} pelanggan, ${cs.payments} pembayaran\n\nData HP saat ini akan diganti.`))return;
+  if(ls.customers||ls.payments)downloadJson(local,`MAHDY-NET_SEBELUM_AMBIL_DRIVE_${ymdLocal()}.json`);await importData(cloudData);closeModal("syncModal");toast("Data Drive sudah diambil");
 }
 async function pushToDrive(){
-  const local=await exportData(),ls=summary(local),cloud=cloudSnapshot||await getCloudMain(),cs=summary(cloud.data);
-  if(ls.customers===0&&cs.customers>0){alert("Diblokir: data HP kosong tidak boleh menimpa Drive yang berisi pelanggan.");return}
-  const msg=`Kirim data HP ke Drive?\n\nHP: ${ls.customers} pelanggan, ${ls.payments} pembayaran\nDrive: ${cs.customers} pelanggan, ${cs.payments} pembayaran\n\nVersi Drive lama akan dibackup otomatis terlebih dahulu.`;
-  if(!confirm(msg))return;
-  try{
-    if(cloud.data)await createSafetyBackup(cloud.data,"SEBELUM_KIRIM");
-    if(cloud.file)await updateDriveFile(cloud.file.id,local);else await createDriveFile(MAIN_FILE,local);
-    closeModal("syncModal");toast("Data HP berhasil dikirim ke Drive");
-  }catch(e){alert("Gagal mengirim ke Drive: "+e.message)}
+  const local=await exportData(),ls=summary(local),cloud=cloudSnapshot||await getCloudHeader(),cc=cloud.manifest?.counts||{};if(ls.customers===0&&(cc.customers||0)>0){alert("Diblokir: data HP kosong tidak boleh menimpa Drive yang berisi pelanggan.");return}
+  if(!confirm(`Kirim data HP ke Drive V7?\n\nHP: ${ls.customers} pelanggan, ${ls.payments} pembayaran\nDrive: ${cc.customers||0} pelanggan, ${cc.payments||0} pembayaran\n\nData akan disimpan terstruktur per tahun dan snapshot lama dibuat lebih dulu.`))return;
+  try{await writeBundle(await buildBundle(),{backup:true});cloudSnapshot=await getCloudHeader();closeModal("syncModal");toast("Data V7 berhasil dikirim ke Drive")}catch(e){alert("Gagal mengirim ke Drive: "+e.message)}
 }
-async function backupNow(){
-  if(!googleAccessToken){toast("Hubungkan Google Drive dulu");return}
-  try{const data=await exportData(),s=summary(data);if(!s.customers&&!s.payments&&!confirm("Data saat ini kosong. Tetap buat backup kosong?"))return;await createSafetyBackup(data,"MANUAL");toast("Backup selesai")}catch(e){alert("Backup gagal: "+e.message)}
+async function backupNow(){if(!googleAccessToken){toast("Hubungkan Google Drive dulu");return}try{const st=await ensureDriveStructure(),mf=await findJson("manifest.json",st.data.id);if(!mf){toast("Belum ada data V7 di Drive");return}await createStructuredSafetyBackup(st,"MANUAL");toast("Snapshot backup V7 selesai")}catch(e){alert("Backup gagal: "+e.message)}}
+async function findSnapshotFolders(){return await driveList(`name contains '${SNAPSHOT_PREFIX}' and mimeType='application/vnd.google-apps.folder' and trashed=false`)}
+async function restoreSnapshot(folder){
+  const files=await listChildren(folder.id),map=new Map(files.map(f=>[f.name,f])),read=async n=>map.has(n)?await downloadDrive(map.get(n).id):null;
+  const legacy=map.get("legacy__mahdy-net-data.json");if(legacy)return await downloadDrive(legacy.id);
+  const manifest=await read("data__manifest.json");if(!manifest)throw new Error("Manifest snapshot tidak ditemukan");const packages=await read("data__packages.json"),customers=await read("data__customers.json"),payments=[];
+  for(const y of manifest.paymentYears||[]){const d=await read(`payments__${y}.json`);if(Array.isArray(d?.items))payments.push(...d.items)}return{schema:2,revision:manifest.revision||0,modifiedAt:manifest.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
 }
 async function openRestore(){
-  if(!googleAccessToken){toast("Hubungkan Google Drive dulu");return}
-  try{
-    const files=await listNamed(BACKUP_PREFIX,true),box=$("restoreList");box.innerHTML="";
-    if(!files.length){box.innerHTML='<div class="empty-state">Belum ada backup.</div>'}
-    for(const f of files){
-      const row=document.createElement("div");row.className="restore-row";row.innerHTML=`<div><b>${f.name}</b><small>${new Date(f.modifiedTime).toLocaleString("id-ID")}</small></div><button class="btn subtle">Restore</button>`;
-      row.querySelector("button").addEventListener("click",async()=>{
-        try{
-          const backup=await downloadDrive(f.id),bs=summary(backup),local=await exportData(),ls=summary(local);
-          if(!confirm(`Restore backup ini?\n\nBackup: ${bs.customers} pelanggan, ${bs.payments} pembayaran\nSaat ini: ${ls.customers} pelanggan, ${ls.payments} pembayaran\n\nData saat ini akan diganti.`))return;
-          if(ls.customers||ls.payments)downloadJson(local,`MAHDY-NET_SEBELUM_RESTORE_${ymdLocal()}.json`);
-          await importData(backup);closeModal("restoreModal");toast("Restore selesai");
-        }catch(e){alert("Restore gagal: "+e.message)}
-      });
-      box.appendChild(row);
-    }
-    openModal("restoreModal");
+  if(!googleAccessToken){toast("Hubungkan Google Drive dulu");return}try{const snaps=await findSnapshotFolders(),legacy=await driveList(`name contains '${BACKUP_PREFIX}' and trashed=false`),box=$("restoreList");box.innerHTML="";const items=[...snaps.map(f=>({type:"snapshot",f})),...legacy.map(f=>({type:"legacy",f}))].sort((a,b)=>String(b.f.modifiedTime||"").localeCompare(String(a.f.modifiedTime||"")));
+    if(!items.length)box.innerHTML='<div class="empty-state">Belum ada backup.</div>';
+    for(const it of items){const f=it.f,row=document.createElement("div");row.className="restore-row";row.innerHTML=`<div><b>${f.name}</b><small>${f.modifiedTime?new Date(f.modifiedTime).toLocaleString("id-ID"):it.type}</small></div><button class="btn subtle">Restore</button>`;row.querySelector("button").addEventListener("click",async()=>{try{const backup=it.type==="snapshot"?await restoreSnapshot(f):await downloadDrive(f.id),bs=summary(backup),local=await exportData(),ls=summary(local);if(!confirm(`Restore backup ini?\n\nBackup: ${bs.customers} pelanggan, ${bs.payments} pembayaran\nSaat ini: ${ls.customers} pelanggan, ${ls.payments} pembayaran\n\nData saat ini akan diganti.`))return;if(ls.customers||ls.payments)downloadJson(local,`MAHDY-NET_SEBELUM_RESTORE_${ymdLocal()}.json`);await importData(backup);closeModal("restoreModal");toast("Restore selesai")}catch(e){alert("Restore gagal: "+e.message)}});box.appendChild(row)}openModal("restoreModal");
   }catch(e){alert("Gagal membaca backup: "+e.message)}
 }
-function downloadJson(data,name){
-  const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000);
-}
-async function exportLocal(){downloadJson(await exportData(),`MAHDY-NET_${ymdLocal()}.json`)}
-async function importLocalFile(file){
-  const text=await file.text(),data=JSON.parse(text),s=summary(data),local=summary(await exportData());
-  if(!confirm(`Import file ini?\n\nFile: ${s.customers} pelanggan, ${s.payments} pembayaran\nSaat ini: ${local.customers} pelanggan, ${local.payments} pembayaran\n\nData saat ini akan diganti.`))return;
-  if(local.customers||local.payments)downloadJson(await exportData(),`MAHDY-NET_SEBELUM_IMPORT_${ymdLocal()}.json`);
-  await importData(data);toast("Import selesai");
-}
+function downloadJson(data,name){const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
+async function exportLocal(){downloadJson(await exportData(),`MAHDY-NET_V7_${ymdLocal()}.json`)}
+async function importLocalFile(file){const text=await file.text(),data=JSON.parse(text),s=summary(data),local=summary(await exportData());if(!confirm(`Import file ini?\n\nFile: ${s.customers} pelanggan, ${s.payments} pembayaran\nSaat ini: ${local.customers} pelanggan, ${local.payments} pembayaran\n\nData saat ini akan diganti.`))return;if(local.customers||local.payments)downloadJson(await exportData(),`MAHDY-NET_SEBELUM_IMPORT_${ymdLocal()}.json`);await importData(data);toast("Import selesai")}
 
 function showView(id){
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id===id));
@@ -390,6 +406,7 @@ $("editCustomerBtn").addEventListener("click",()=>{closeModal("customerDetailMod
 $("fStartDate").addEventListener("change",()=>{if(!$("fStartDate").value)return;const d=new Date($("fStartDate").value+"T00:00:00");d.setMonth(d.getMonth()+1);$("fFirstBillDate").value=ymdLocal(d)});
 $("customerSearch").addEventListener("input",()=>{currentPage=1;renderCustomerTable()});
 $("paymentSearch").addEventListener("input",renderPayments);
+$("paymentYearSelect")?.addEventListener("change",renderPayments);
 $("yearSelect").addEventListener("change",()=>{selectedYear=Number($("yearSelect").value);renderCustomerTable()});
 $("pageSize").addEventListener("change",()=>{currentPage=1;renderCustomerTable()});
 $("connectDriveBtn").addEventListener("click",connectDrive);
@@ -403,5 +420,7 @@ $("exportBtn").addEventListener("click",exportLocal);
 $("importFile").addEventListener("change",async e=>{if(e.target.files[0]){try{await importLocalFile(e.target.files[0])}catch(err){alert("Import gagal: "+err.message)}e.target.value=""}});
 
 (async()=>{
-  await openDB();initYears();initDefaultDates();await seedPackages();await fillPackageSelect("fCustomerPackage");updateDriveUI();await renderAll();
+  await openDB();await ensureCustomerCodes();initYears();initDefaultDates();await seedPackages();await fillPackageSelect("fCustomerPackage");
+  const py=$("paymentYearSelect");if(py){const y=new Date().getFullYear();for(let i=y-10;i<=y+1;i++){const o=document.createElement("option");o.value=i;o.textContent=i;if(i===y)o.selected=true;py.appendChild(o)}}
+  await rebuildCurrentSnapshot();updateDriveUI();await renderAll();
 })();
