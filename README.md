@@ -24,3 +24,10 @@ Versi V7 dibangun dari V6 Premium UI dengan fokus pada skalabilitas dan integras
 
 ## Catatan migrasi
 Sebelum migrasi pertama, tetap simpan satu export JSON V6 di HP. Pada pengiriman pertama ke Drive V7, file V6 lama tidak dihapus dan akan disalin ke snapshot migrasi jika ditemukan.
+
+
+## V7.1 hotfix
+- Mencegah file payment tahunan ganda saat sinkron cepat/berulang.
+- Menyimpan ID file Drive aktif di cache browser.
+- Membersihkan duplikat bernama sama di folder aktif saat sinkron berikutnya (duplikat dipindahkan ke Trash).
+- Menambahkan lock agar dua proses kirim Drive tidak berjalan bersamaan.

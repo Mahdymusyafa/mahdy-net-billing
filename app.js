@@ -283,7 +283,7 @@ async function buildSummaryFile(){const x=await getOne("summary","current")||awa
 async function renderAll(){await renderPackages();await renderCustomerTable();await renderPayments();await renderHome();await renderLocalStatus()}
 
 async function exportData(){
-  const state=await getState();return{schema:2,app:"MAHDY-NET Billing V7",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments")}
+  const state=await getState();return{schema:2,app:"MAHDY-NET Billing V7.1",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments")}
 }
 function summary(data){return{customers:Array.isArray(data?.customers)?data.customers.length:0,payments:Array.isArray(data?.payments)?data.payments.length:0,packages:Array.isArray(data?.packages)?data.packages.length:0,modifiedAt:data?.modifiedAt||null,revision:data?.revision||0}}
 async function importData(data,{mark=true}={}){
@@ -295,7 +295,7 @@ async function importData(data,{mark=true}={}){
 function groupPaymentsByYear(payments){const out={};for(const p of payments){const y=String(p.period||"").slice(0,4);if(!/^\d{4}$/.test(y))continue;(out[y]||(out[y]=[])).push(p)}return out}
 async function buildBundle(){
   await rebuildCurrentSnapshot();const state=await getState(),packages=await all("packages"),customers=await all("customers"),payments=await all("payments"),years=groupPaymentsByYear(payments),summaryFile=await buildSummaryFile(),bot=await buildBotStatus();
-  const manifest={schema:2,app:"MAHDY-NET Billing V7",revision:state.revision||0,modifiedAt:state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length},paymentYears:Object.keys(years).sort()};
+  const manifest={schema:2,app:"MAHDY-NET Billing V7.1",revision:state.revision||0,modifiedAt:state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length},paymentYears:Object.keys(years).sort()};
   return{manifest,packages:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:packages},customers:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:customers},current:{schema:1,generatedAt:nowISO(),items:await all("current")},summary:summaryFile,paymentYears:years,bot};
 }
 
@@ -313,11 +313,58 @@ async function findFolder(name,parentId=null){let q=`name='${qEscape(name)}' and
 async function createFolder(name,parentId=null){const body={name,mimeType:"application/vnd.google-apps.folder"};if(parentId)body.parents=[parentId];return (await driveFetch("https://www.googleapis.com/drive/v3/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json()}
 async function ensureFolder(name,parentId=null){return await findFolder(name,parentId)||await createFolder(name,parentId)}
 async function ensureDriveStructure(){const root=await ensureFolder(ROOT_FOLDER),data=await ensureFolder("data",root.id),payments=await ensureFolder("payments",root.id),bot=await ensureFolder("bot",root.id),backups=await ensureFolder("backups",root.id);return{root,data,payments,bot,backups}}
-async function findJson(name,parentId){const q=`name='${qEscape(name)}' and '${qEscape(parentId)}' in parents and trashed=false`;return (await driveList(q))[0]||null}
+const DRIVE_ID_CACHE_KEY="mahdy_v7_drive_file_ids";
+let driveWriteLock=false;
+function driveIdCache(){try{return JSON.parse(localStorage.getItem(DRIVE_ID_CACHE_KEY)||"{}")}catch{return{}}}
+function cacheDriveId(parentId,name,id){const c=driveIdCache();c[`${parentId}/${name}`]=id;localStorage.setItem(DRIVE_ID_CACHE_KEY,JSON.stringify(c))}
+function cachedDriveId(parentId,name){return driveIdCache()[`${parentId}/${name}`]||null}
+function forgetDriveId(parentId,name){const c=driveIdCache();delete c[`${parentId}/${name}`];localStorage.setItem(DRIVE_ID_CACHE_KEY,JSON.stringify(c))}
+async function trashDriveFile(id){return driveFetch(`https://www.googleapis.com/drive/v3/files/${id}`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify({trashed:true})})}
+async function findJsonAll(name,parentId){const q=`name='${qEscape(name)}' and '${qEscape(parentId)}' in parents and trashed=false`;return await driveList(q)}
+async function findJson(name,parentId){
+  const files=await findJsonAll(name,parentId);
+  if(!files.length)return null;
+  files.sort((a,b)=>String(b.modifiedTime||"").localeCompare(String(a.modifiedTime||"")));
+  const keep=files[0];
+  cacheDriveId(parentId,name,keep.id);
+  return keep;
+}
 async function downloadDrive(id){return (await driveFetch(`https://www.googleapis.com/drive/v3/files/${id}?alt=media`)).json()}
-async function createJson(name,data,parentId){const meta={name,mimeType:"application/json",parents:[parentId]},boundary="mahdy_"+Date.now()+Math.random().toString(36).slice(2);const body=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}\r\n--${boundary}--`;return (await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart",{method:"POST",headers:{"Content-Type":"multipart/related; boundary="+boundary},body})).json()}
-async function updateJson(id,data){return (await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)})).json()}
-async function upsertJson(name,data,parentId){const f=await findJson(name,parentId);return f?await updateJson(f.id,data):await createJson(name,data,parentId)}
+async function createJson(name,data,parentId){
+  const meta={name,mimeType:"application/json",parents:[parentId]},boundary="mahdy_"+Date.now()+Math.random().toString(36).slice(2);
+  const body=`--${boundary}\r\nContent-Type: application/json; charset=UTF-8\r\n\r\n${JSON.stringify(meta)}\r\n--${boundary}\r\nContent-Type: application/json\r\n\r\n${JSON.stringify(data)}\r\n--${boundary}--`;
+  const created=await (await driveFetch("https://www.googleapis.com/upload/drive/v3/files?uploadType=multipart&fields=id,name,modifiedTime",{method:"POST",headers:{"Content-Type":"multipart/related; boundary="+boundary},body})).json();
+  cacheDriveId(parentId,name,created.id);
+  return created;
+}
+async function updateJson(id,data){return (await driveFetch(`https://www.googleapis.com/upload/drive/v3/files/${id}?uploadType=media&fields=id,name,modifiedTime`,{method:"PATCH",headers:{"Content-Type":"application/json"},body:JSON.stringify(data)})).json()}
+async function upsertJson(name,data,parentId){
+  const cached=cachedDriveId(parentId,name);
+  if(cached){
+    try{return await updateJson(cached,data)}
+    catch(e){forgetDriveId(parentId,name)}
+  }
+  let files=await findJsonAll(name,parentId);
+  if(files.length){
+    files.sort((a,b)=>String(b.modifiedTime||"").localeCompare(String(a.modifiedTime||"")));
+    const keep=files[0];
+    cacheDriveId(parentId,name,keep.id);
+    const updated=await updateJson(keep.id,data);
+    // Bersihkan duplikat lama dengan nama yang sama di folder aktif.
+    for(const extra of files.slice(1)){try{await trashDriveFile(extra.id)}catch{}}
+    return updated;
+  }
+  // Beri kesempatan indeks Drive menyusul agar klik sinkron berurutan tidak membuat file ganda.
+  await new Promise(r=>setTimeout(r,700));
+  files=await findJsonAll(name,parentId);
+  if(files.length){
+    files.sort((a,b)=>String(b.modifiedTime||"").localeCompare(String(a.modifiedTime||"")));
+    const keep=files[0];cacheDriveId(parentId,name,keep.id);
+    for(const extra of files.slice(1)){try{await trashDriveFile(extra.id)}catch{}}
+    return await updateJson(keep.id,data);
+  }
+  return await createJson(name,data,parentId);
+}
 async function listChildren(parentId){return await driveList(`'${qEscape(parentId)}' in parents and trashed=false`)}
 async function copyFile(fileId,name,parentId){return (await driveFetch(`https://www.googleapis.com/drive/v3/files/${fileId}/copy`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({name,parents:[parentId]})})).json()}
 async function findLegacyMain(){const q=`name='${qEscape(LEGACY_MAIN_FILE)}' and trashed=false`;return (await driveList(q))[0]||null}
@@ -329,7 +376,7 @@ async function getCloudHeader(){
 async function readV7Bundle(header){
   const st=await ensureDriveStructure(),read=async(name,folder)=>{const f=await findJson(name,folder.id);return f?await downloadDrive(f.id):null},manifest=header.manifest||await read("manifest.json",st.data),packages=await read("packages.json",st.data),customers=await read("customers.json",st.data),payments=[];
   for(const y of manifest?.paymentYears||[]){const d=await read(`${y}.json`,st.payments);if(Array.isArray(d?.items))payments.push(...d.items);else if(Array.isArray(d))payments.push(...d)}
-  return{schema:2,app:"MAHDY-NET Billing V7",revision:manifest?.revision||0,modifiedAt:manifest?.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
+  return{schema:2,app:"MAHDY-NET Billing V7.1",revision:manifest?.revision||0,modifiedAt:manifest?.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
 }
 async function createStructuredSafetyBackup(st,label="AUTO"){
   const year=String(new Date().getFullYear()),yearFolder=await ensureFolder(year,st.backups.id),stamp=new Date().toISOString().replace(/[:.]/g,"-"),snap=await createFolder(`${SNAPSHOT_PREFIX}${label}_${stamp}`,yearFolder.id);
@@ -337,11 +384,15 @@ async function createStructuredSafetyBackup(st,label="AUTO"){
   await createJson("snapshot-info.json",{schema:1,label,createdAt:nowISO()},snap.id);return snap;
 }
 async function writeBundle(bundle,{backup=true}={}){
-  const st=await ensureDriveStructure();const existingManifest=await findJson("manifest.json",st.data.id);if(backup&&existingManifest)await createStructuredSafetyBackup(st,"SEBELUM_KIRIM");
-  const legacy=await findLegacyMain();if(backup&&!existingManifest&&legacy){const yearFolder=await ensureFolder(String(new Date().getFullYear()),st.backups.id),snap=await createFolder(`${SNAPSHOT_PREFIX}MIGRASI_V6_${new Date().toISOString().replace(/[:.]/g,"-")}`,yearFolder.id);await copyFile(legacy.id,"legacy__mahdy-net-data.json",snap.id)}
-  await upsertJson("packages.json",bundle.packages,st.data.id);await upsertJson("customers.json",bundle.customers,st.data.id);await upsertJson("current.json",bundle.current,st.data.id);await upsertJson("summary.json",bundle.summary,st.data.id);
-  for(const [y,items] of Object.entries(bundle.paymentYears))await upsertJson(`${y}.json`,{schema:1,year:Number(y),revision:bundle.manifest.revision,modifiedAt:bundle.manifest.modifiedAt,items},st.payments.id);
-  await upsertJson("wa-status.json",bundle.bot,st.bot.id);await upsertJson("manifest.json",bundle.manifest,st.data.id);return st;
+  if(driveWriteLock)throw new Error("Sinkronisasi Drive masih berjalan. Tunggu sampai selesai.");
+  driveWriteLock=true;
+  try{
+    const st=await ensureDriveStructure();const existingManifest=await findJson("manifest.json",st.data.id);if(backup&&existingManifest)await createStructuredSafetyBackup(st,"SEBELUM_KIRIM");
+    const legacy=await findLegacyMain();if(backup&&!existingManifest&&legacy){const yearFolder=await ensureFolder(String(new Date().getFullYear()),st.backups.id),snap=await createFolder(`${SNAPSHOT_PREFIX}MIGRASI_V6_${new Date().toISOString().replace(/[:.]/g,"-")}`,yearFolder.id);await copyFile(legacy.id,"legacy__mahdy-net-data.json",snap.id)}
+    await upsertJson("packages.json",bundle.packages,st.data.id);await upsertJson("customers.json",bundle.customers,st.data.id);await upsertJson("current.json",bundle.current,st.data.id);await upsertJson("summary.json",bundle.summary,st.data.id);
+    for(const [y,items] of Object.entries(bundle.paymentYears))await upsertJson(`${y}.json`,{schema:1,year:Number(y),revision:bundle.manifest.revision,modifiedAt:bundle.manifest.modifiedAt,items},st.payments.id);
+    await upsertJson("wa-status.json",bundle.bot,st.bot.id);await upsertJson("manifest.json",bundle.manifest,st.data.id);return st;
+  } finally {driveWriteLock=false}
 }
 async function openSafeSync(){
   if(!googleAccessToken){toast("Hubungkan Google Drive dulu");showView("dataView");return}
