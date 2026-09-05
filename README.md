@@ -31,3 +31,11 @@ Sebelum migrasi pertama, tetap simpan satu export JSON V6 di HP. Pada pengiriman
 - Menyimpan ID file Drive aktif di cache browser.
 - Membersihkan duplikat bernama sama di folder aktif saat sinkron berikutnya (duplikat dipindahkan ke Trash).
 - Menambahkan lock agar dua proses kirim Drive tidak berjalan bersamaan.
+
+
+## V7.2 WhatsApp pelanggan
+- Field WhatsApp resmi pada tambah/edit pelanggan.
+- Input 08..., 8..., atau 62... dinormalisasi menjadi 62....
+- WhatsApp disimpan di customers.json dan ikut ke bot/wa-status.json.
+- customerId/customerCode tetap menjadi identitas permanen.
+- Pelanggan lama tanpa nomor tetap aman.

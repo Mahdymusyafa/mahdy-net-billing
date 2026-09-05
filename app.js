@@ -13,6 +13,15 @@ let googleTokenClient=null,googleAccessToken=null,cloudSnapshot=null;
 
 const $=id=>document.getElementById(id);
 function money(n){return new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(Number(n||0))}
+function normalizeWhatsApp(v){
+  let d=String(v||"").replace(/\D/g,"");
+  if(!d)return "";
+  if(d.startsWith("62"))return d;
+  if(d.startsWith("0"))return "62"+d.slice(1);
+  if(d.startsWith("8"))return "62"+d;
+  return d;
+}
+
 function ymdLocal(date=new Date()){
   const y=date.getFullYear(),m=String(date.getMonth()+1).padStart(2,"0"),d=String(date.getDate()).padStart(2,"0");
   return `${y}-${m}-${d}`;
@@ -98,7 +107,7 @@ async function buildCurrentRecord(c,now=new Date()){
   for(let yy=first.year;yy<=y;yy++){const from=yy===first.year?first.month:0,to=yy===y?m:11;for(let mm=from;mm<=to;mm++){const per=monthKey(yy,mm);if(paidSet.has(per))continue;const d=dueDate(c,yy,mm);d.setHours(0,0,0,0);const t=new Date(now);t.setHours(0,0,0,0);if(t>d)arrears.push(per)}}
   const payment=ps.find(p=>p.period===billingPeriod)||null;
   const status=payment?"paid":await statusFor(c,y,m);const bill=dueDate(c,y,m);
-  return{customerId:c.id,customerCode:c.customerCode,name:c.name,billingPeriod,usagePeriod:previousMonthKey(y,m),invoiceId:invoiceId(c,y,m),billingDate:ymdLocal(bill),amount:Number(c.monthlyPrice||0),status,paymentAmount:payment?Number(payment.amount||0):0,paymentDate:payment?.date||null,arrearsCount:arrears.length,arrearsPeriods:arrears,updatedAt:nowISO()};
+  return{customerId:c.id,customerCode:c.customerCode,name:c.name,whatsapp:c.whatsapp||"",billingPeriod,usagePeriod:previousMonthKey(y,m),invoiceId:invoiceId(c,y,m),billingDate:ymdLocal(bill),amount:Number(c.monthlyPrice||0),status,paymentAmount:payment?Number(payment.amount||0):0,paymentDate:payment?.date||null,arrearsCount:arrears.length,arrearsPeriods:arrears,updatedAt:nowISO()};
 }
 async function refreshCurrentForCustomer(customerId){const c=await getOne("customers",customerId);if(!c||c.active===false){await del("current",customerId);return}await put("current",await buildCurrentRecord(c))}
 async function rebuildCurrentSnapshot(force=false){
@@ -179,24 +188,24 @@ async function openCustomerForm(id=null){
   editingCustomerId=id;await fillPackageSelect("fCustomerPackage");
   if(id){
     const c=(await all("customers")).find(x=>x.id===id);if(!c)return;
-    $("customerFormTitle").textContent="Edit pelanggan";$("fCustomerName").value=c.name;await fillPackageSelect("fCustomerPackage",c.packageId);
+    $("customerFormTitle").textContent="Edit pelanggan";$("fCustomerName").value=c.name;$("fCustomerWhatsapp").value=c.whatsapp||"";await fillPackageSelect("fCustomerPackage",c.packageId);
     $("fCustomerPrice").value=c.customPrice||"";$("fRegistrationDate").value=c.registrationDate;$("fStartDate").value=c.startDate;$("fFirstBillDate").value=c.firstBillDate;
   }else{
-    $("customerFormTitle").textContent="Tambah pelanggan";$("fCustomerName").value="";$("fCustomerPrice").value="";initDefaultDates();
+    $("customerFormTitle").textContent="Tambah pelanggan";$("fCustomerName").value="";$("fCustomerWhatsapp").value="";$("fCustomerPrice").value="";initDefaultDates();
   }
   openModal("customerFormModal");
 }
 async function saveCustomer(){
-  const name=$("fCustomerName").value.trim(),packageId=Number($("fCustomerPackage").value),reg=$("fRegistrationDate").value,start=$("fStartDate").value,first=$("fFirstBillDate").value;
+  const name=$("fCustomerName").value.trim(),whatsapp=normalizeWhatsApp($("fCustomerWhatsapp").value),packageId=Number($("fCustomerPackage").value),reg=$("fRegistrationDate").value,start=$("fStartDate").value,first=$("fFirstBillDate").value;
   if(!name||!packageId||!reg||!start||!first){toast("Lengkapi data pelanggan");return}
   const pkg=(await all("packages")).find(x=>x.id===packageId);if(!pkg)return;
   const customPrice=Number($("fCustomerPrice").value.replace(/\D/g,""))||null;
   if(editingCustomerId){
     const c=(await all("customers")).find(x=>x.id===editingCustomerId);
-    Object.assign(c,{name,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,updatedAt:nowISO()});
+    Object.assign(c,{name,whatsapp,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,updatedAt:nowISO()});
     await put("customers",c);
   }else{
-    await add("customers",{customerCode:await nextCustomerCode(),name,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,active:true,createdAt:nowISO()});
+    await add("customers",{customerCode:await nextCustomerCode(),name,whatsapp,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,active:true,createdAt:nowISO()});
   }
   await touchData();const targetId=editingCustomerId||(await all("customers")).slice(-1)[0]?.id;if(targetId)await refreshCurrentForCustomer(targetId);await rebuildSummary();closeModal("customerFormModal");await renderAll();toast("Pelanggan disimpan");
 }
@@ -210,7 +219,7 @@ async function renderCustomerTable(){
   const start=(currentPage-1)*size,page=customers.slice(start,start+size),body=$("customerRows");body.innerHTML="";
   for(let i=0;i<page.length;i++){
     const c=page[i],paidSet=new Set((await paymentsForCustomerYear(c.id,selectedYear)).map(p=>p.period)),row=document.createElement("tr");
-    row.innerHTML=`<td>${start+i+1}</td><td><span class="customer-link" data-id="${c.id}">${c.name}</span><div class="row-meta">${c.customerCode} · ${c.speed} · ${money(c.monthlyPrice)}</div></td>`;
+    row.innerHTML=`<td>${start+i+1}</td><td><span class="customer-link" data-id="${c.id}">${c.name}</span><div class="row-meta">${c.customerCode} · ${c.speed} · ${money(c.monthlyPrice)}${c.whatsapp?` · WA ${c.whatsapp}`:""}</div></td>`;
     for(let m=0;m<12;m++){
       const td=document.createElement("td"),period=monthKey(selectedYear,m);let st;
       const first=firstBillPeriod(c);
@@ -253,7 +262,7 @@ async function deletePayment(){
 async function openCustomerDetail(id){
   editingCustomerId=id;const c=(await all("customers")).find(x=>x.id===id);if(!c)return;
   $("detailCustomerName").textContent=c.name;
-  $("detailCustomerInfo").innerHTML=`<div class="detail-grid"><div class="detail-cell"><span>Paket</span><b>${c.packageName} · ${c.speed}</b></div><div class="detail-cell"><span>Tarif</span><b>${money(c.monthlyPrice)}</b></div><div class="detail-cell"><span>Registrasi</span><b>${c.registrationDate}</b></div><div class="detail-cell"><span>Mulai layanan</span><b>${c.startDate}</b></div><div class="detail-cell"><span>Tagihan pertama</span><b>${c.firstBillDate}</b></div></div>`;
+  $("detailCustomerInfo").innerHTML=`<div class="detail-grid"><div class="detail-cell"><span>Paket</span><b>${c.packageName} · ${c.speed}</b></div><div class="detail-cell"><span>Tarif</span><b>${money(c.monthlyPrice)}</b></div><div class="detail-cell"><span>WhatsApp</span><b>${c.whatsapp||"-"}</b></div><div class="detail-cell"><span>Registrasi</span><b>${c.registrationDate}</b></div><div class="detail-cell"><span>Mulai layanan</span><b>${c.startDate}</b></div><div class="detail-cell"><span>Tagihan pertama</span><b>${c.firstBillDate}</b></div></div>`;
   const ps=(await paymentsForCustomer(id)).sort((a,b)=>b.period.localeCompare(a.period)),hist=$("detailPaymentHistory");hist.innerHTML="";
   if(!ps.length)hist.innerHTML='<div class="empty-state">Belum ada pembayaran.</div>';
   ps.forEach(p=>{const {year,month}=parsePeriod(p.period),d=document.createElement("div");d.className="history-row";d.innerHTML=`<div><b>${MONTHS[month]} ${year}</b><small>${p.date} · ${p.method}</small></div><b>${money(p.amount)}</b>`;hist.appendChild(d)});
@@ -276,14 +285,14 @@ async function renderHome(){
   attention.slice(0,8).forEach(r=>{const d=document.createElement("div");d.className="attention-item";d.innerHTML=`<div><b>${r.name}</b><small>${r.customerCode} · ${money(r.amount)}</small></div><span class="status-pill ${r.arrearsCount>0?"red":"amber"}">${r.arrearsCount>0?"Tunggak":"Tagihan terbit"}</span>`;d.addEventListener("click",async()=>{const c=await getOne("customers",r.customerId);showView("customersView");$("customerSearch").value=c?.name||r.name;currentPage=1;renderCustomerTable()});list.appendChild(d)});
 }
 async function buildBotStatus(){
-  const state=await getState(),rows=(await all("current")).map(r=>({invoiceId:r.invoiceId,customerId:r.customerCode,name:r.name,billingPeriod:r.billingPeriod,usagePeriod:r.usagePeriod,billingDate:r.billingDate,amount:r.amount,status:r.status==="paid"?"paid":"unpaid",paymentDate:r.paymentDate||null}));
+  const state=await getState(),rows=(await all("current")).map(r=>({invoiceId:r.invoiceId,customerId:r.customerCode,name:r.name,whatsapp:r.whatsapp||"",billingPeriod:r.billingPeriod,usagePeriod:r.usagePeriod,billingDate:r.billingDate,amount:r.amount,status:r.status==="paid"?"paid":"unpaid",paymentDate:r.paymentDate||null}));
   return{schema:1,app:"MAHDY-NET Billing",generatedAt:nowISO(),revision:state.revision||0,customers:rows};
 }
 async function buildSummaryFile(){const x=await getOne("summary","current")||await rebuildSummary();return{schema:1,generatedAt:nowISO(),current:x}}
 async function renderAll(){await renderPackages();await renderCustomerTable();await renderPayments();await renderHome();await renderLocalStatus()}
 
 async function exportData(){
-  const state=await getState();return{schema:2,app:"MAHDY-NET Billing V7.1",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments")}
+  const state=await getState();return{schema:2,app:"MAHDY-NET Billing V7.2",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments")}
 }
 function summary(data){return{customers:Array.isArray(data?.customers)?data.customers.length:0,payments:Array.isArray(data?.payments)?data.payments.length:0,packages:Array.isArray(data?.packages)?data.packages.length:0,modifiedAt:data?.modifiedAt||null,revision:data?.revision||0}}
 async function importData(data,{mark=true}={}){
@@ -295,7 +304,7 @@ async function importData(data,{mark=true}={}){
 function groupPaymentsByYear(payments){const out={};for(const p of payments){const y=String(p.period||"").slice(0,4);if(!/^\d{4}$/.test(y))continue;(out[y]||(out[y]=[])).push(p)}return out}
 async function buildBundle(){
   await rebuildCurrentSnapshot();const state=await getState(),packages=await all("packages"),customers=await all("customers"),payments=await all("payments"),years=groupPaymentsByYear(payments),summaryFile=await buildSummaryFile(),bot=await buildBotStatus();
-  const manifest={schema:2,app:"MAHDY-NET Billing V7.1",revision:state.revision||0,modifiedAt:state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length},paymentYears:Object.keys(years).sort()};
+  const manifest={schema:2,app:"MAHDY-NET Billing V7.2",revision:state.revision||0,modifiedAt:state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length},paymentYears:Object.keys(years).sort()};
   return{manifest,packages:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:packages},customers:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:customers},current:{schema:1,generatedAt:nowISO(),items:await all("current")},summary:summaryFile,paymentYears:years,bot};
 }
 
@@ -376,7 +385,7 @@ async function getCloudHeader(){
 async function readV7Bundle(header){
   const st=await ensureDriveStructure(),read=async(name,folder)=>{const f=await findJson(name,folder.id);return f?await downloadDrive(f.id):null},manifest=header.manifest||await read("manifest.json",st.data),packages=await read("packages.json",st.data),customers=await read("customers.json",st.data),payments=[];
   for(const y of manifest?.paymentYears||[]){const d=await read(`${y}.json`,st.payments);if(Array.isArray(d?.items))payments.push(...d.items);else if(Array.isArray(d))payments.push(...d)}
-  return{schema:2,app:"MAHDY-NET Billing V7.1",revision:manifest?.revision||0,modifiedAt:manifest?.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
+  return{schema:2,app:"MAHDY-NET Billing V7.2",revision:manifest?.revision||0,modifiedAt:manifest?.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
 }
 async function createStructuredSafetyBackup(st,label="AUTO"){
   const year=String(new Date().getFullYear()),yearFolder=await ensureFolder(year,st.backups.id),stamp=new Date().toISOString().replace(/[:.]/g,"-"),snap=await createFolder(`${SNAPSHOT_PREFIX}${label}_${stamp}`,yearFolder.id);
@@ -474,4 +483,10 @@ $("importFile").addEventListener("change",async e=>{if(e.target.files[0]){try{aw
   await openDB();await ensureCustomerCodes();initYears();initDefaultDates();await seedPackages();await fillPackageSelect("fCustomerPackage");
   const py=$("paymentYearSelect");if(py){const y=new Date().getFullYear();for(let i=y-10;i<=y+1;i++){const o=document.createElement("option");o.value=i;o.textContent=i;if(i===y)o.selected=true;py.appendChild(o)}}
   await rebuildCurrentSnapshot();updateDriveUI();await renderAll();
-})();
+})();async function migrateWhatsappFields(){
+  const cs=await all("customers");let changed=false;
+  for(const c of cs){const n=normalizeWhatsApp(c.whatsapp||"");if(c.whatsapp!==n){c.whatsapp=n;await put("customers",c);changed=true}}
+  return changed;
+}
+
+
