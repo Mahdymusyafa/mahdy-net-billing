@@ -1,0 +1,265 @@
+<!doctype html>
+<html lang="id">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#f5f8fc">
+  <title>MAHDY-NET Billing</title>
+  <link rel="stylesheet" href="styles.css">
+  <script src="https://accounts.google.com/gsi/client" async defer></script>
+</head>
+<body>
+<div class="app-shell">
+  <header class="topbar">
+    <div class="brand">
+      <div class="logo-frame"><img src="assets/logo-mahdy-net.png" alt="MAHDY-NET"></div>
+      <div class="brand-copy">
+        <h1>Billing Manager</h1>
+        <span id="localSaveStatus">Auto-save aktif</span>
+      </div>
+    </div>
+    <button class="icon-btn primary" id="quickAddCustomer" title="Tambah pelanggan">＋</button>
+  </header>
+
+  <main>
+    <section class="view active" id="homeView">
+      <div class="hero">
+        <div>
+          <div class="eyebrow">RINGKASAN BULAN INI</div>
+          <h2 id="homeMonthLabel">—</h2>
+          <p id="homeSummary">Belum ada data pelanggan.</p>
+        </div>
+        <div class="sync-badge" id="driveBadge"><i></i><span>Drive belum terhubung</span></div>
+      </div>
+
+      <div class="stats-grid">
+        <article class="stat-card">
+          <span>Pelanggan</span>
+          <strong id="statCustomers">0</strong>
+          <small>aktif</small>
+        </article>
+        <article class="stat-card green">
+          <span>Lunas</span>
+          <strong id="statPaid">0</strong>
+          <small>bulan ini</small>
+        </article>
+        <article class="stat-card amber">
+          <span>Tagihan terbit</span>
+          <strong id="statIssued">0</strong>
+          <small>belum dibayar</small>
+        </article>
+        <article class="stat-card red">
+          <span>Menunggak</span>
+          <strong id="statArrears">0</strong>
+          <small>lewat tanggal tagihan</small>
+        </article>
+      </div>
+
+      <div class="money-card">
+        <div>
+          <span>Pendapatan bulan ini</span>
+          <strong id="statRevenue">Rp0</strong>
+        </div>
+        <button class="text-btn" data-go="paymentsView">Lihat riwayat →</button>
+      </div>
+
+      <div class="section-head">
+        <div><span class="eyebrow">PERLU PERHATIAN</span><h3>Tagihan pelanggan</h3></div>
+        <button class="text-btn" data-go="customersView">Lihat semua</button>
+      </div>
+      <div class="attention-list" id="attentionList">
+        <div class="empty-state">Belum ada data.</div>
+      </div>
+    </section>
+
+    <section class="view" id="customersView">
+      <div class="page-title">
+        <div><span class="eyebrow">PELANGGAN</span><h2>Daftar pelanggan</h2></div>
+        <button class="btn primary" id="addCustomerOpen">＋ Tambah</button>
+      </div>
+
+      <div class="filter-card">
+        <label class="searchbox">
+          <span>⌕</span>
+          <input id="customerSearch" placeholder="Cari nama pelanggan...">
+        </label>
+        <div class="filter-row">
+          <label><span>Tahun</span><select id="yearSelect"></select></label>
+          <label><span>Tampilkan</span>
+            <select id="pageSize">
+              <option>10</option><option>20</option><option>25</option><option>50</option><option>100</option>
+            </select>
+          </label>
+        </div>
+      </div>
+
+      <div class="customer-focus" id="customerFocus"></div>
+
+      <div class="table-card">
+        <div class="month-scroller-note">← Geser tabel untuk melihat bulan lainnya →</div>
+        <div class="table-wrap">
+          <table>
+            <thead><tr id="customerHeader"><th>No.</th><th>Nama pelanggan</th></tr></thead>
+            <tbody id="customerRows"></tbody>
+          </table>
+        </div>
+        <div class="pager">
+          <span id="pageInfo">0 data</span>
+          <div id="pageButtons"></div>
+        </div>
+      </div>
+    </section>
+
+    <section class="view" id="packagesView">
+      <div class="page-title">
+        <div><span class="eyebrow">PRESET</span><h2>Paket internet</h2></div>
+        <button class="btn primary" id="addPackageOpen">＋ Paket</button>
+      </div>
+      <p class="intro">Buat paket sekali, lalu tinggal pilih saat menambah pelanggan.</p>
+      <div class="package-grid" id="packageGrid"></div>
+    </section>
+
+    <section class="view" id="paymentsView">
+      <div class="page-title">
+        <div><span class="eyebrow">TRANSAKSI</span><h2>Riwayat pembayaran</h2></div>
+      </div>
+      <label class="searchbox">
+        <span>⌕</span><input id="paymentSearch" placeholder="Cari nama pelanggan...">
+      </label>
+      <div class="payment-list" id="paymentList"></div>
+    </section>
+
+    <section class="view" id="dataView">
+      <div class="page-title">
+        <div><span class="eyebrow">PENYIMPANAN</span><h2>Data & Google Drive & Backup</h2></div>
+      </div>
+
+      <div class="drive-card">
+        <div class="drive-head">
+          <div class="drive-icon">G</div>
+          <div>
+            <strong>Google Drive & Backup</strong>
+            <p id="driveStatusText">Belum terhubung</p>
+          </div>
+        </div>
+        <button class="btn primary full" id="connectDriveBtn">Hubungkan Google Drive & Backup</button>
+        <button class="btn subtle full hidden" id="disconnectDriveBtn">Putuskan koneksi</button>
+      </div>
+
+      <div class="safe-sync-card">
+        <div class="safe-icon">↔</div>
+        <div>
+          <strong>Sinkron Aman</strong>
+          <p>Selalu membandingkan data HP dan Drive sebelum ada data yang diganti.</p>
+        </div>
+        <button class="btn primary" id="safeSyncBtn">Bandingkan & Sinkron</button>
+      </div>
+
+      <div class="data-actions">
+        <button class="action-tile" id="backupBtn"><b>＋</b><span>Backup</span><small>Buat salinan baru di Drive</small></button>
+        <button class="action-tile" id="restoreBtn"><b>↥</b><span>Restore</span><small>Pilih backup dari Drive</small></button>
+        <button class="action-tile" id="exportBtn"><b>↓</b><span>Export JSON</span><small>Simpan file ke HP</small></button>
+        <label class="action-tile" for="importFile"><b>↑</b><span>Import JSON</span><small>Ambil file dari HP</small></label>
+        <input type="file" id="importFile" accept=".json,application/json" hidden>
+      </div>
+
+      <div class="safety-note">
+        <strong>Pengaman aktif</strong>
+        <p>Data kosong tidak boleh menimpa Drive yang berisi pelanggan. Setiap kirim data ke Drive membuat snapshot lama terlebih dahulu.</p>
+      </div>
+    </section>
+  </main>
+
+  <nav class="bottom-nav">
+    <button class="nav-item active" data-view="homeView"><span>⌂</span><b>Beranda</b></button>
+    <button class="nav-item" data-view="customersView"><span>♙</span><b>Pelanggan</b></button>
+    <button class="nav-item" data-view="packagesView"><span>▦</span><b>Paket</b></button>
+    <button class="nav-item" data-view="dataView"><span>☁</span><b>Data</b></button>
+  </nav>
+</div>
+
+<!-- Customer form -->
+<div class="modal" id="customerFormModal">
+  <div class="sheet">
+    <div class="sheet-head"><div><span class="eyebrow">PELANGGAN</span><h3 id="customerFormTitle">Tambah pelanggan</h3></div><button class="close-btn" data-close="customerFormModal">×</button></div>
+    <div class="form-grid">
+      <label><span>Nama pelanggan</span><input id="fCustomerName" placeholder="Nama lengkap"></label>
+      <label><span>Paket internet</span><select id="fCustomerPackage"></select></label>
+      <label><span>Harga khusus <em>opsional</em></span><input id="fCustomerPrice" inputmode="numeric" placeholder="Kosong = harga paket"></label>
+      <label><span>Tanggal registrasi</span><input id="fRegistrationDate" type="date"></label>
+      <label><span>Mulai berlangganan</span><input id="fStartDate" type="date"></label>
+      <label><span>Tanggal tagihan pertama</span><input id="fFirstBillDate" type="date"></label>
+    </div>
+    <div class="form-help">Pascabayar: pelanggan memakai layanan lebih dulu. Tagihan pertama biasanya satu bulan setelah mulai berlangganan.</div>
+    <div class="sheet-actions"><button class="btn subtle" data-close="customerFormModal">Batal</button><button class="btn primary" id="saveCustomerBtn">Simpan</button></div>
+  </div>
+</div>
+
+<!-- Package form -->
+<div class="modal" id="packageFormModal">
+  <div class="sheet compact">
+    <div class="sheet-head"><div><span class="eyebrow">PAKET</span><h3 id="packageFormTitle">Tambah paket</h3></div><button class="close-btn" data-close="packageFormModal">×</button></div>
+    <div class="form-grid single">
+      <label><span>Nama paket</span><input id="fPackageName" placeholder="Contoh: Reguler"></label>
+      <label><span>Kecepatan</span><input id="fPackageSpeed" placeholder="Contoh: 10 Mbps"></label>
+      <label><span>Tarif bulanan</span><input id="fPackagePrice" inputmode="numeric" placeholder="150000"></label>
+    </div>
+    <div class="sheet-actions"><button class="btn subtle" data-close="packageFormModal">Batal</button><button class="btn primary" id="savePackageBtn">Simpan</button></div>
+  </div>
+</div>
+
+<!-- Payment -->
+<div class="modal" id="paymentModal">
+  <div class="sheet compact">
+    <div class="sheet-head"><div><span class="eyebrow">PEMBAYARAN</span><h3 id="paymentTitle">Pembayaran</h3></div><button class="close-btn" data-close="paymentModal">×</button></div>
+    <div class="form-grid single">
+      <label><span>Periode</span><input id="payPeriod" disabled></label>
+      <label><span>Nominal</span><input id="payAmount" inputmode="numeric"></label>
+      <label><span>Tanggal bayar</span><input id="payDate" type="date"></label>
+      <label><span>Metode</span><select id="payMethod"><option>Tunai</option><option>Transfer</option><option>Lainnya</option></select></label>
+      <label><span>Catatan <em>opsional</em></span><input id="payNote"></label>
+    </div>
+    <div class="sheet-actions spread"><button class="btn danger hidden" id="deletePaymentBtn">Batalkan pembayaran</button><div><button class="btn subtle" data-close="paymentModal">Tutup</button><button class="btn primary" id="savePaymentBtn">Simpan</button></div></div>
+  </div>
+</div>
+
+<!-- Customer detail -->
+<div class="modal" id="customerDetailModal">
+  <div class="sheet">
+    <div class="sheet-head"><div><span class="eyebrow">DETAIL</span><h3 id="detailCustomerName">Pelanggan</h3></div><button class="close-btn" data-close="customerDetailModal">×</button></div>
+    <div id="detailCustomerInfo"></div>
+    <div class="detail-actions"><button class="btn primary" id="editCustomerBtn">✎ Edit pelanggan</button></div>
+    <div class="history-title">Riwayat pembayaran</div>
+    <div id="detailPaymentHistory"></div>
+  </div>
+</div>
+
+<!-- Safe sync -->
+<div class="modal" id="syncModal">
+  <div class="sheet compact">
+    <div class="sheet-head"><div><span class="eyebrow">SINKRON AMAN</span><h3>Bandingkan data</h3></div><button class="close-btn" data-close="syncModal">×</button></div>
+    <div class="compare-grid">
+      <div class="compare-box"><span>HP ini</span><strong id="localCustomerCount">0 pelanggan</strong><small id="localPaymentCount">0 pembayaran</small><small id="localModified">—</small></div>
+      <div class="compare-arrow">↔</div>
+      <div class="compare-box cloud"><span>Google Drive & Backup</span><strong id="cloudCustomerCount">—</strong><small id="cloudPaymentCount">—</small><small id="cloudModified">—</small></div>
+    </div>
+    <div class="sync-warning" id="syncWarning"></div>
+    <div class="sync-actions">
+      <button class="btn subtle full" id="pullDriveBtn">↓ Ambil data Drive ke HP</button>
+      <button class="btn primary full" id="pushDriveBtn">↑ Kirim data HP ke Drive</button>
+    </div>
+  </div>
+</div>
+
+<!-- Restore list -->
+<div class="modal" id="restoreModal">
+  <div class="sheet">
+    <div class="sheet-head"><div><span class="eyebrow">RESTORE</span><h3>Pilih backup</h3></div><button class="close-btn" data-close="restoreModal">×</button></div>
+    <div id="restoreList"></div>
+  </div>
+</div>
+
+<div class="toast" id="toast"></div>
+<script src="app.js"></script>
+</body>
+</html>
