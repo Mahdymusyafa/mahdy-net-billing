@@ -1,72 +1,81 @@
-# MAHDY-NET Billing V8.0 Event Ledger
+# MAHDY-NET Billing V8.1 — Fast Sync + Dynamic Multi-Invoice
 
-Versi V7 dibangun dari V6 Premium UI dengan fokus pada skalabilitas dan integrasi WhatsApp Bot.
+Versi ini adalah upgrade langsung dari Billing V8.0 Event Ledger. **Schema Event Ledger tetap 8** sehingga data V8.0 tidak perlu dihapus atau dimigrasi ulang.
 
 ## Perubahan utama
-- Customer ID permanen otomatis: `C000001`, `C000002`, dst.
-- Migrasi otomatis pelanggan V6 yang belum memiliki Customer ID.
-- IndexedDB V2 dengan index pembayaran per pelanggan/periode sehingga tabel tidak lagi memindai seluruh riwayat berulang kali.
-- Cache `current` dan `summary` untuk dashboard agar pembukaan web di HP tetap ringan.
-- Riwayat transaksi pada menu pembayaran dibatasi per tahun dan maksimal 250 item render sekaligus.
-- Google Drive V7 memakai satu folder utama `MAHDY-NET Billing` dengan struktur:
-  - `data/manifest.json`
-  - `data/customers.json`
-  - `data/packages.json`
-  - `data/current.json`
-  - `data/summary.json`
-  - `payments/YYYY.json`
-  - `bot/wa-status.json`
-  - `backups/YYYY/SNAPSHOT_.../`
-- Sinkron V7 tetap manual/terarah; data HP kosong diblokir agar tidak menimpa cloud berisi data.
-- Data V6 `mahdy-net-data.json` masih dapat dibaca saat migrasi dan tidak dihapus otomatis.
-- Snapshot backup Drive dibuat sebelum overwrite struktur V7.
-- `wa-status.json` berisi data ringkas yang nanti dibaca STB/WhatsApp Bot secara read-only.
 
-## Catatan migrasi
-Sebelum migrasi pertama, tetap simpan satu export JSON V6 di HP. Pada pengiriman pertama ke Drive V7, file V6 lama tidak dihapus dan akan disalin ke snapshot migrasi jika ditemukan.
+### 1. Data WhatsApp Bot siap untuk 1 atau banyak invoice
+`bot/wa-status.json` naik ke schema 3 tetapi tetap menyimpan field kompatibilitas lama (`invoiceId`, `billingPeriod`, `amount`, `status`, dst.).
 
+Setiap pelanggan sekarang juga membawa:
+- `outstandingInvoices[]`
+- `outstandingCount`
+- `outstandingTotal`
+- `outstandingInvoiceIds[]`
+- `latestOutstandingInvoice`
+- `latestIssuedInvoice`
+- `pascaBayarExample`
+- `dynamicMessage.unpaid`
 
-## V7.1 hotfix
-- Mencegah file payment tahunan ganda saat sinkron cepat/berulang.
-- Menyimpan ID file Drive aktif di cache browser.
-- Membersihkan duplikat bernama sama di folder aktif saat sinkron berikutnya (duplikat dipindahkan ke Trash).
-- Menambahkan lock agar dua proses kirim Drive tidak berjalan bersamaan.
+`pascaBayarExample` selalu diambil dari **invoice terbaru yang sudah terbit**, sehingga Bot nanti dapat membuat kalimat seperti:
 
+> Tagihan yang terbit pada 20 September 2026 merupakan pembayaran atas pemakaian Agustus 2026. Pemakaian September 2026 akan ditagihkan pada 20 Oktober 2026.
 
-## V7.2 WhatsApp pelanggan
-- Field WhatsApp resmi pada tambah/edit pelanggan.
-- Input 08..., 8..., atau 62... dinormalisasi menjadi 62....
-- WhatsApp disimpan di customers.json dan ikut ke bot/wa-status.json.
-- customerId/customerCode tetap menjadi identitas permanen.
-- Pelanggan lama tanpa nomor tetap aman.
+Invoice lama tetap masuk rincian tunggakan tetapi tidak perlu dijadikan contoh pascabayar satu per satu.
 
-## V7.2.1 hotfix edit pelanggan
-- Memisahkan ID pelanggan yang sedang dilihat dari ID pelanggan yang sedang diedit.
-- Mencegah nomor/nama dari edit pelanggan A bocor ke pelanggan B.
-- Setelah Simpan/Batal, target edit selalu di-reset.
-- Update hanya dilakukan pada satu record customer ID yang dipilih.
+### 2. Dua template dinamis untuk Bot berikutnya
+Billing mempublikasikan capability untuk dua template adaptif:
+- `dynamic_bill_unpaid`
+- `dynamic_bill_paid`
 
+Satu template yang sama dapat menangani 1, 2, 3, 4, 5, dst. invoice. Jumlah invoice, rincian, dan total dihitung dari data, bukan dari pilihan template per jumlah bulan.
 
-# V8.0 Event Ledger
+### 3. Pembayaran beberapa invoice sekaligus
+Pada Detail Pelanggan tersedia tombol **Lunasi beberapa tagihan**.
 
-V8 mengubah sinkronisasi dari overwrite database menjadi merge per-event. Data V7 dimigrasikan tanpa menghapus store lama terlebih dahulu. Pembayaran, pembatalan, edit pelanggan, dan edit paket dicatat sebagai event append-only.
+Semua invoice yang dipilih mendapat satu `paymentGroupId`. Event tetap satu per invoice agar state akhir invoice tetap independen, tetapi group metadata membuat Bot berikutnya dapat mengirim **satu pesan LUNAS** untuk seluruh invoice dalam transaksi tersebut.
 
-## Pengaman utama
-- HP kosong tidak dapat menghapus Drive karena sinkron tidak melakukan replace database.
-- Event HP, Drive, dan bot digabung berdasarkan eventId.
-- Konflik eventId dengan isi berbeda menghentikan sinkron.
-- Konflik dua customer berbeda memakai customerCode yang sama menghentikan sinkron.
-- PAID -> CANCELLED -> PAID tetap menyimpan seluruh sejarah dan status akhir dihitung dari event terbaru.
-- Tombol Batalkan Pembayaran membuat event baru; record sejarah tidak dihapus.
-- `bot-events.json` dibuat oleh Billing dan hanya file itu yang diberi izin Writer ke service account bot.
-- Template/bot tidak terkait dengan paket Billing ini dan tidak diubah.
+Untuk mencegah Bot V2 lama mengirim notifikasi berkali-kali, hanya event invoice terbaru dalam grup yang diberi `notifyCustomer:true`. Bot dinamis berikutnya akan membaca `paymentGroupId` dan seluruh rincian grup.
 
+### 4. Nominal invoice lama lebih stabil
+Untuk invoice belum lunas, V8.1 mencoba menentukan nominal berdasarkan histori event pelanggan pada tanggal tagihan tersebut. Pembayaran yang sudah tercatat tetap memakai nominal historis pada event pembayaran.
 
-## Audit final V8.0
-- Sinkron per-event; HP kosong tidak mempunyai jalur overwrite database.
-- Event migration V7 dari HP dan Drive dideduplikasi berdasarkan isi event, bukan label sumber.
-- Jika satu file event Drive gagal dibaca, sinkron berhenti sebelum menulis.
-- Jumlah event billing di manifest divalidasi terhadap event unik yang benar-benar terbaca.
-- Setelah event HP ditulis, sinkron melakukan final re-read untuk menangkap event dari HP lain yang masuk saat proses berjalan.
-- `bot-events.json` wajib dapat dibaca dan service account wajib memiliki Writer; jika tidak, sinkron dihentikan agar integrasi tidak setengah aktif.
-- Backup snapshot dibuat sebelum merge terhadap Drive yang sudah berisi data.
+### 5. Fast Event Sync
+Sinkron normal tidak lagi selalu mengunduh semua file event dan menulis semua file turunan.
+
+Optimasi:
+- ID struktur folder Drive disimpan di cache perangkat.
+- Metadata file event diperiksa lebih dulu.
+- File event yang tidak berubah memakai cache IndexedDB lokal.
+- File event yang berubah diunduh secara paralel.
+- Final safety pass tetap ada, tetapi hanya perubahan baru yang diambil.
+- Log event perangkat hanya ditulis jika isi event perangkat memang berubah.
+- Sebelum log perangkat ditimpa, dibuat backup delta di folder `backups`.
+- File turunan (`packages.json`, `customers.json`, `current.json`, `summary.json`, `wa-status.json`, pembayaran per tahun) hanya ditulis jika hash kontennya berubah.
+- `manifest.json` menyimpan `eventHash` dan `fileHashes`.
+- Backup manual tetap membuat snapshot penuh seperti sebelumnya.
+
+Sync pertama setelah upgrade mungkin tetap lebih lama karena cache/file hash belum tersedia. Sync berikutnya yang hanya memiliki sedikit perubahan seharusnya jauh lebih cepat.
+
+## Pengaman yang tetap dipertahankan
+- Event append-only sebagai source of truth.
+- HP kosong tidak punya jalur overwrite seluruh Drive.
+- Konflik event ID dengan isi berbeda diblokir.
+- Konflik customerCode diblokir.
+- File event Drive yang gagal dibaca membatalkan sync sebelum materialisasi akhir.
+- Manifest yang mengaku punya lebih banyak event daripada yang terbaca membatalkan sync.
+- `bot-events.json` tetap satu-satunya channel event billing yang dapat ditulis Bot.
+- Writer service account tetap diverifikasi, lalu hasil verifikasi dicache maksimal 24 jam.
+- Pembatalan pembayaran membuat event baru; event LUNAS lama tidak dihapus.
+
+## Urutan upgrade
+1. Export JSON dari Billing V8.0 sebagai cadangan lokal.
+2. Jangan hapus IndexedDB/browser data.
+3. Ganti file GitHub Pages dengan isi folder V8.1 ini.
+4. Buka V8.1 pada HP utama yang datanya paling lengkap.
+5. Hubungkan Drive.
+6. Jalankan **Bandingkan & Sinkron → GABUNGKAN EVENT SEKARANG**.
+7. Setelah V8.1 sukses satu kali, HP lain dapat reload V8.1 dan sync satu per satu.
+
+## Catatan Bot
+Billing V8.1 sengaja dibuat lebih dulu. Bot V2.0.x lama tetap membaca field kompatibilitas lama. Fitur pesan multiple/dinamis penuh akan digunakan setelah Bot versi berikutnya diperbarui untuk membaca `outstandingInvoices`, `pascaBayarExample`, `paymentGroupId`, dan `paymentGroups`.

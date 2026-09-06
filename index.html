@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f5f8fc">
-  <title>MAHDY-NET Billing V8.0 Event Ledger</title>
+  <title>MAHDY-NET Billing V8.1 Fast Event Ledger</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -14,7 +14,7 @@
     <div class="brand">
       <div class="logo-frame"><img src="assets/logo-mahdy-net.png" alt="MAHDY-NET"></div>
       <div class="brand-copy">
-        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.0</small></h1>
+        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.1</small></h1>
         <span id="localSaveStatus">Auto-save aktif</span>
       </div>
     </div>
@@ -155,7 +155,7 @@
         <div class="safe-icon">↔</div>
         <div>
           <strong>Sinkron Aman</strong>
-          <p>Selalu membandingkan data HP dan Drive sebelum ada data yang diganti.</p>
+          <p>Fast Event Sync: cek perubahan metadata lebih dulu, ambil hanya event yang berubah, lalu gabungkan dengan aman.</p>
         </div>
         <button class="btn primary" id="safeSyncBtn">Bandingkan & Sinkron</button>
       </div>
@@ -170,7 +170,7 @@
 
       <div class="safety-note">
         <strong>Pengaman aktif</strong>
-        <p>V8 memakai Event Ledger: perubahan HP, Google Drive, dan WhatsApp Bot digabung per event, bukan overwrite database. Pembayaran/cancel tetap memiliki riwayat dan snapshot keamanan dibuat sebelum merge.</p>
+        <p>V8.1 tetap memakai Event Ledger append-only. Sinkron normal hanya membaca file event yang berubah dan membuat backup delta sebelum log perangkat ditulis. Backup manual tetap membuat snapshot penuh.</p>
       </div>
     </section>
   </main>
@@ -229,12 +229,32 @@
   </div>
 </div>
 
+<!-- Multi invoice payment -->
+<div class="modal" id="multiPaymentModal">
+  <div class="sheet">
+    <div class="sheet-head"><div><span class="eyebrow">PEMBAYARAN MULTIPLE</span><h3 id="multiPaymentTitle">Lunasi beberapa tagihan</h3></div><button class="close-btn" data-close="multiPaymentModal">×</button></div>
+    <div class="multi-pay-note">Pilih invoice yang dibayar dalam satu transaksi. Sistem memberi satu <b>Payment Group ID</b> agar WhatsApp Bot terbaru dapat mengirim satu pesan LUNAS dinamis untuk seluruh invoice terpilih.</div>
+    <div id="multiInvoiceList" class="multi-invoice-list"></div>
+    <div class="multi-total"><span>Total dipilih</span><strong id="multiPaymentTotal">Rp0</strong></div>
+    <div class="form-grid">
+      <label><span>Tanggal bayar</span><input id="multiPayDate" type="date"></label>
+      <label><span>Metode</span><select id="multiPayMethod"><option>Tunai</option><option>Transfer</option><option>Lainnya</option></select></label>
+      <label class="span-2"><span>Catatan <em>opsional</em></span><input id="multiPayNote" placeholder="Contoh: Pembayaran 3 bulan sekaligus"></label>
+    </div>
+    <div class="form-help">Kompatibilitas: sebelum WhatsApp Bot dinamis terbaru dipasang, hanya satu event pada grup yang diberi penanda notifikasi agar bot lama tidak mengirim pesan LUNAS berkali-kali.</div>
+    <div class="sheet-actions"><button class="btn subtle" data-close="multiPaymentModal">Batal</button><button class="btn primary" id="saveMultiPaymentBtn">✓ Tandai LUNAS</button></div>
+  </div>
+</div>
+
 <!-- Customer detail -->
 <div class="modal" id="customerDetailModal">
   <div class="sheet">
     <div class="sheet-head"><div><span class="eyebrow">DETAIL</span><h3 id="detailCustomerName">Pelanggan</h3></div><button class="close-btn" data-close="customerDetailModal">×</button></div>
     <div id="detailCustomerInfo"></div>
-    <div class="detail-actions"><button class="btn primary" id="editCustomerBtn">✎ Edit pelanggan</button></div>
+    <div class="detail-actions">
+      <button class="btn primary" id="editCustomerBtn">✎ Edit pelanggan</button>
+      <button class="btn subtle" id="multiPaymentOpenBtn">✓ Lunasi beberapa tagihan</button>
+    </div>
     <div class="history-title">Riwayat pembayaran</div>
     <div id="detailPaymentHistory"></div>
   </div>
@@ -243,7 +263,7 @@
 <!-- Safe sync -->
 <div class="modal" id="syncModal">
   <div class="sheet compact">
-    <div class="sheet-head"><div><span class="eyebrow">EVENT LEDGER V8</span><h3>Bandingkan & gabungkan event</h3></div><button class="close-btn" data-close="syncModal">×</button></div>
+    <div class="sheet-head"><div><span class="eyebrow">EVENT LEDGER V8.1</span><h3>Bandingkan & gabungkan event cepat</h3></div><button class="close-btn" data-close="syncModal">×</button></div>
     <div class="compare-grid">
       <div class="compare-box"><span>HP ini</span><strong id="localCustomerCount">0 pelanggan</strong><small id="localPaymentCount">0 pembayaran</small><small id="localModified">—</small></div>
       <div class="compare-arrow">↔</div>

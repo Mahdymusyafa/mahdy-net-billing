@@ -1074,3 +1074,16 @@ tbody tr:hover td:first-child,tbody tr:hover td:nth-child(2){background:#fbfdff}
   }
   .detail-grid{grid-template-columns:1fr}
 }
+
+/* V8.1 dynamic multi-invoice payment */
+.multi-pay-note{padding:12px 14px;border-radius:14px;background:var(--soft-blue,#eef6ff);border:1px solid var(--line);font-size:12px;line-height:1.55;margin-bottom:12px}
+.multi-invoice-list{display:flex;flex-direction:column;gap:9px;max-height:42vh;overflow:auto;padding:2px}
+.multi-invoice-row{display:grid;grid-template-columns:auto 1fr auto;gap:10px;align-items:center;padding:12px;border:1px solid var(--line);border-radius:14px;background:var(--surface,#fff)}
+.multi-invoice-row input{width:19px;height:19px}
+.multi-invoice-copy b{display:block;font-size:13px}.multi-invoice-copy small{display:block;color:var(--muted);font-size:11px;margin-top:3px;line-height:1.4}
+.multi-invoice-amount{font-weight:800;font-size:12px;white-space:nowrap}
+.multi-total{display:flex;align-items:center;justify-content:space-between;margin:12px 0;padding:13px 14px;border-radius:14px;background:var(--surface2,#f7f9fc);border:1px solid var(--line)}
+.multi-total span{color:var(--muted);font-size:12px}.multi-total strong{font-size:17px}
+.span-2{grid-column:1/-1}
+.sync-fast-note{font-size:11px;color:var(--muted);margin-top:6px}
+@media(max-width:620px){.multi-invoice-row{grid-template-columns:auto 1fr}.multi-invoice-amount{grid-column:2}.span-2{grid-column:auto}}
