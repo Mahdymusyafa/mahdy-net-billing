@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f5f8fc">
-  <title>MAHDY-NET Billing V7</title>
+  <title>MAHDY-NET Billing V8.0 Event Ledger</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -14,7 +14,7 @@
     <div class="brand">
       <div class="logo-frame"><img src="assets/logo-mahdy-net.png" alt="MAHDY-NET"></div>
       <div class="brand-copy">
-        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V7</small></h1>
+        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.0</small></h1>
         <span id="localSaveStatus">Auto-save aktif</span>
       </div>
     </div>
@@ -170,7 +170,7 @@
 
       <div class="safety-note">
         <strong>Pengaman aktif</strong>
-        <p>V7 menyimpan data di folder MAHDY-NET Billing dengan subfolder data, payments, bot, dan backups. Data kosong tidak boleh menimpa Drive yang berisi pelanggan.</p>
+        <p>V8 memakai Event Ledger: perubahan HP, Google Drive, dan WhatsApp Bot digabung per event, bukan overwrite database. Pembayaran/cancel tetap memiliki riwayat dan snapshot keamanan dibuat sebelum merge.</p>
       </div>
     </section>
   </main>
@@ -243,7 +243,7 @@
 <!-- Safe sync -->
 <div class="modal" id="syncModal">
   <div class="sheet compact">
-    <div class="sheet-head"><div><span class="eyebrow">SINKRON AMAN</span><h3>Bandingkan data</h3></div><button class="close-btn" data-close="syncModal">×</button></div>
+    <div class="sheet-head"><div><span class="eyebrow">EVENT LEDGER V8</span><h3>Bandingkan & gabungkan event</h3></div><button class="close-btn" data-close="syncModal">×</button></div>
     <div class="compare-grid">
       <div class="compare-box"><span>HP ini</span><strong id="localCustomerCount">0 pelanggan</strong><small id="localPaymentCount">0 pembayaran</small><small id="localModified">—</small></div>
       <div class="compare-arrow">↔</div>
@@ -251,8 +251,9 @@
     </div>
     <div class="sync-warning" id="syncWarning"></div>
     <div class="sync-actions">
-      <button class="btn subtle full" id="pullDriveBtn">↓ Ambil data Drive ke HP</button>
-      <button class="btn primary full" id="pushDriveBtn">↑ Kirim data HP ke Drive</button>
+      <button class="btn subtle full hidden" id="pullDriveBtn">Kompatibilitas</button>
+      <button class="btn primary full hidden" id="pushDriveBtn">Kompatibilitas</button>
+      <button class="btn primary full" id="mergeDriveBtn">↔ GABUNGKAN EVENT SEKARANG</button>
     </div>
   </div>
 </div>

@@ -1,14 +1,16 @@
 
 const MONTHS=["Januari","Februari","Maret","April","Mei","Juni","Juli","Agustus","September","Oktober","November","Desember"];
 const DB_NAME="mahdy_net_billing_safe";
-const DB_VERSION=2;
+const DB_VERSION=3;
 const CLIENT_ID="1048608388100-1jghinhuoff1necs78hd44h7ql0rjhj7.apps.googleusercontent.com";
 const DRIVE_SCOPE="https://www.googleapis.com/auth/drive.file";
 const LEGACY_MAIN_FILE="mahdy-net-data.json";
 const ROOT_FOLDER="MAHDY-NET Billing";
+const V8_SCHEMA=8;
+const BOT_SERVICE_ACCOUNT="mahdy-net-bot@mahdy-net-billing.iam.gserviceaccount.com";
 const BACKUP_PREFIX="MAHDY-NET_Backup_";
 const SNAPSHOT_PREFIX="SNAPSHOT_";
-let db,currentPage=1,selectedYear=new Date().getFullYear(),editingCustomerId=null,editingPackageId=null,paymentCtx=null;
+let db,currentPage=1,selectedYear=new Date().getFullYear(),editingCustomerId=null,detailCustomerId=null,editingPackageId=null,paymentCtx=null;
 let googleTokenClient=null,googleAccessToken=null,cloudSnapshot=null;
 
 const $=id=>document.getElementById(id);
@@ -30,7 +32,7 @@ function monthKey(y,m){return `${y}-${String(m+1).padStart(2,"0")}`}
 function parsePeriod(k){const [y,m]=k.split("-").map(Number);return{year:y,month:m-1}}
 function toast(msg){const t=$("toast");t.textContent=msg;t.classList.add("show");clearTimeout(toast._t);toast._t=setTimeout(()=>t.classList.remove("show"),1800)}
 function openModal(id){$(id).classList.add("show")}
-function closeModal(id){$(id).classList.remove("show")}
+function closeModal(id){$(id).classList.remove("show");if(id==="customerFormModal")editingCustomerId=null;if(id==="customerDetailModal")detailCustomerId=null}
 function nowISO(){return new Date().toISOString()}
 
 function openDB(){
@@ -45,6 +47,11 @@ function openDB(){
       if(!d.objectStoreNames.contains("meta"))d.createObjectStore("meta",{keyPath:"key"});
       if(!d.objectStoreNames.contains("current"))d.createObjectStore("current",{keyPath:"customerId"});
       if(!d.objectStoreNames.contains("summary"))d.createObjectStore("summary",{keyPath:"key"});
+      const events=d.objectStoreNames.contains("events")?tx.objectStore("events"):d.createObjectStore("events",{keyPath:"eventId"});
+      const paymentStates=d.objectStoreNames.contains("paymentStates")?tx.objectStore("paymentStates"):d.createObjectStore("paymentStates",{keyPath:"invoiceId"});
+      if(!events.indexNames.contains("byAt"))events.createIndex("byAt","at",{unique:false});
+      if(!events.indexNames.contains("byType"))events.createIndex("byType","type",{unique:false});
+      if(!events.indexNames.contains("byEntity"))events.createIndex("byEntity","entityKey",{unique:false});
       if(!payments.indexNames.contains("byCustomer"))payments.createIndex("byCustomer","customerId",{unique:false});
       if(!payments.indexNames.contains("byPeriod"))payments.createIndex("byPeriod","period",{unique:false});
       if(!payments.indexNames.contains("byCustomerPeriod"))payments.createIndex("byCustomerPeriod",["customerId","period"],{unique:false});
@@ -106,8 +113,9 @@ async function buildCurrentRecord(c,now=new Date()){
   const first=firstBillPeriod(c);let arrears=[];
   for(let yy=first.year;yy<=y;yy++){const from=yy===first.year?first.month:0,to=yy===y?m:11;for(let mm=from;mm<=to;mm++){const per=monthKey(yy,mm);if(paidSet.has(per))continue;const d=dueDate(c,yy,mm);d.setHours(0,0,0,0);const t=new Date(now);t.setHours(0,0,0,0);if(t>d)arrears.push(per)}}
   const payment=ps.find(p=>p.period===billingPeriod)||null;
+  const invId=invoiceId(c,y,m),paymentState=await getOne("paymentStates",invId);
   const status=payment?"paid":await statusFor(c,y,m);const bill=dueDate(c,y,m);
-  return{customerId:c.id,customerCode:c.customerCode,name:c.name,whatsapp:c.whatsapp||"",billingPeriod,usagePeriod:previousMonthKey(y,m),invoiceId:invoiceId(c,y,m),billingDate:ymdLocal(bill),amount:Number(c.monthlyPrice||0),status,paymentAmount:payment?Number(payment.amount||0):0,paymentDate:payment?.date||null,arrearsCount:arrears.length,arrearsPeriods:arrears,updatedAt:nowISO()};
+  return{customerId:c.id,customerCode:c.customerCode,name:c.name,whatsapp:c.whatsapp||"",billingPeriod,usagePeriod:previousMonthKey(y,m),invoiceId:invId,billingDate:ymdLocal(bill),amount:Number(c.monthlyPrice||0),status,paymentAmount:payment?Number(payment.amount||0):0,paymentDate:payment?.date||null,paymentStateEventId:paymentState?.eventId||null,paymentStatusAt:paymentState?.at||null,paymentSource:paymentState?.source||null,paymentCycle:Number(paymentState?.cycle||0),arrearsCount:arrears.length,arrearsPeriods:arrears,updatedAt:nowISO()};
 }
 async function refreshCurrentForCustomer(customerId){const c=await getOne("customers",customerId);if(!c||c.active===false){await del("current",customerId);return}await put("current",await buildCurrentRecord(c))}
 async function rebuildCurrentSnapshot(force=false){
@@ -196,18 +204,27 @@ async function openCustomerForm(id=null){
   openModal("customerFormModal");
 }
 async function saveCustomer(){
+  const targetIdBeforeSave=editingCustomerId;
   const name=$("fCustomerName").value.trim(),whatsapp=normalizeWhatsApp($("fCustomerWhatsapp").value),packageId=Number($("fCustomerPackage").value),reg=$("fRegistrationDate").value,start=$("fStartDate").value,first=$("fFirstBillDate").value;
   if(!name||!packageId||!reg||!start||!first){toast("Lengkapi data pelanggan");return}
   const pkg=(await all("packages")).find(x=>x.id===packageId);if(!pkg)return;
   const customPrice=Number($("fCustomerPrice").value.replace(/\D/g,""))||null;
-  if(editingCustomerId){
-    const c=(await all("customers")).find(x=>x.id===editingCustomerId);
+  let savedCustomerId=targetIdBeforeSave;
+  if(targetIdBeforeSave!=null){
+    const c=(await all("customers")).find(x=>x.id===targetIdBeforeSave);
+    if(!c){toast("Pelanggan tidak ditemukan");editingCustomerId=null;return}
     Object.assign(c,{name,whatsapp,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,updatedAt:nowISO()});
     await put("customers",c);
   }else{
-    await add("customers",{customerCode:await nextCustomerCode(),name,whatsapp,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,active:true,createdAt:nowISO()});
+    savedCustomerId=await add("customers",{customerCode:await nextCustomerCode(),name,whatsapp,packageId,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first,active:true,createdAt:nowISO()});
   }
-  await touchData();const targetId=editingCustomerId||(await all("customers")).slice(-1)[0]?.id;if(targetId)await refreshCurrentForCustomer(targetId);await rebuildSummary();closeModal("customerFormModal");await renderAll();toast("Pelanggan disimpan");
+  editingCustomerId=null;
+  await touchData();
+  if(savedCustomerId!=null)await refreshCurrentForCustomer(savedCustomerId);
+  await rebuildSummary();
+  closeModal("customerFormModal");
+  await renderAll();
+  toast("Pelanggan disimpan");
 }
 
 async function renderCustomerTable(){
@@ -260,7 +277,7 @@ async function deletePayment(){
   if(!paymentCtx?.existing)return;if(confirm("Batalkan catatan pembayaran ini?")){const cid=paymentCtx.customer.id;await del("payments",paymentCtx.existing.id);await touchData();await refreshCurrentForCustomer(cid);await rebuildSummary();closeModal("paymentModal");await renderAll()}
 }
 async function openCustomerDetail(id){
-  editingCustomerId=id;const c=(await all("customers")).find(x=>x.id===id);if(!c)return;
+  detailCustomerId=id;const c=(await all("customers")).find(x=>x.id===id);if(!c)return;
   $("detailCustomerName").textContent=c.name;
   $("detailCustomerInfo").innerHTML=`<div class="detail-grid"><div class="detail-cell"><span>Paket</span><b>${c.packageName} · ${c.speed}</b></div><div class="detail-cell"><span>Tarif</span><b>${money(c.monthlyPrice)}</b></div><div class="detail-cell"><span>WhatsApp</span><b>${c.whatsapp||"-"}</b></div><div class="detail-cell"><span>Registrasi</span><b>${c.registrationDate}</b></div><div class="detail-cell"><span>Mulai layanan</span><b>${c.startDate}</b></div><div class="detail-cell"><span>Tagihan pertama</span><b>${c.firstBillDate}</b></div></div>`;
   const ps=(await paymentsForCustomer(id)).sort((a,b)=>b.period.localeCompare(a.period)),hist=$("detailPaymentHistory");hist.innerHTML="";
@@ -292,7 +309,7 @@ async function buildSummaryFile(){const x=await getOne("summary","current")||awa
 async function renderAll(){await renderPackages();await renderCustomerTable();await renderPayments();await renderHome();await renderLocalStatus()}
 
 async function exportData(){
-  const state=await getState();return{schema:2,app:"MAHDY-NET Billing V7.2",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments")}
+  const state=await getState();return{schema:2,app:"MAHDY-NET Billing V7.2.1",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments")}
 }
 function summary(data){return{customers:Array.isArray(data?.customers)?data.customers.length:0,payments:Array.isArray(data?.payments)?data.payments.length:0,packages:Array.isArray(data?.packages)?data.packages.length:0,modifiedAt:data?.modifiedAt||null,revision:data?.revision||0}}
 async function importData(data,{mark=true}={}){
@@ -304,7 +321,7 @@ async function importData(data,{mark=true}={}){
 function groupPaymentsByYear(payments){const out={};for(const p of payments){const y=String(p.period||"").slice(0,4);if(!/^\d{4}$/.test(y))continue;(out[y]||(out[y]=[])).push(p)}return out}
 async function buildBundle(){
   await rebuildCurrentSnapshot();const state=await getState(),packages=await all("packages"),customers=await all("customers"),payments=await all("payments"),years=groupPaymentsByYear(payments),summaryFile=await buildSummaryFile(),bot=await buildBotStatus();
-  const manifest={schema:2,app:"MAHDY-NET Billing V7.2",revision:state.revision||0,modifiedAt:state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length},paymentYears:Object.keys(years).sort()};
+  const manifest={schema:2,app:"MAHDY-NET Billing V7.2.1",revision:state.revision||0,modifiedAt:state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length},paymentYears:Object.keys(years).sort()};
   return{manifest,packages:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:packages},customers:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:customers},current:{schema:1,generatedAt:nowISO(),items:await all("current")},summary:summaryFile,paymentYears:years,bot};
 }
 
@@ -314,14 +331,14 @@ function initGoogle(){
 }
 function connectDrive(){if(initGoogle())googleTokenClient.requestAccessToken({prompt:""})}
 function disconnectDrive(){googleAccessToken=null;cloudSnapshot=null;updateDriveUI()}
-function updateDriveUI(){const ok=!!googleAccessToken;$("driveBadge").classList.toggle("ok",ok);$("driveBadge").querySelector("span").textContent=ok?"Drive terhubung":"Drive belum terhubung";$("driveStatusText").textContent=ok?"Terhubung · struktur V7 siap":"Belum terhubung";$("connectDriveBtn").classList.toggle("hidden",ok);$("disconnectDriveBtn").classList.toggle("hidden",!ok)}
+function updateDriveUI(){const ok=!!googleAccessToken;$("driveBadge").classList.toggle("ok",ok);$("driveBadge").querySelector("span").textContent=ok?"Drive terhubung":"Drive belum terhubung";$("driveStatusText").textContent=ok?"Terhubung · Event Ledger V8 siap":"Belum terhubung";$("connectDriveBtn").classList.toggle("hidden",ok);$("disconnectDriveBtn").classList.toggle("hidden",!ok)}
 async function driveFetch(url,opts={}){if(!googleAccessToken)throw new Error("Hubungkan Google Drive dulu");const r=await fetch(url,{...opts,headers:{Authorization:"Bearer "+googleAccessToken,...(opts.headers||{})}});if(!r.ok){if(r.status===401){googleAccessToken=null;updateDriveUI()}throw new Error(await r.text())}return r}
 function qEscape(v){return String(v).replace(/\\/g,"\\\\").replace(/'/g,"\\'")}
 async function driveList(query,fields="files(id,name,mimeType,parents,modifiedTime,size)",pageSize=100){const r=await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&fields=${encodeURIComponent(fields)}&pageSize=${pageSize}`);return (await r.json()).files||[]}
 async function findFolder(name,parentId=null){let q=`name='${qEscape(name)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;if(parentId)q+=` and '${qEscape(parentId)}' in parents`;return (await driveList(q))[0]||null}
 async function createFolder(name,parentId=null){const body={name,mimeType:"application/vnd.google-apps.folder"};if(parentId)body.parents=[parentId];return (await driveFetch("https://www.googleapis.com/drive/v3/files",{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify(body)})).json()}
 async function ensureFolder(name,parentId=null){return await findFolder(name,parentId)||await createFolder(name,parentId)}
-async function ensureDriveStructure(){const root=await ensureFolder(ROOT_FOLDER),data=await ensureFolder("data",root.id),payments=await ensureFolder("payments",root.id),bot=await ensureFolder("bot",root.id),backups=await ensureFolder("backups",root.id);return{root,data,payments,bot,backups}}
+async function ensureDriveStructure(){const root=await ensureFolder(ROOT_FOLDER),data=await ensureFolder("data",root.id),payments=await ensureFolder("payments",root.id),bot=await ensureFolder("bot",root.id),events=await ensureFolder("events",root.id),eventsBilling=await ensureFolder("billing",events.id),backups=await ensureFolder("backups",root.id);return{root,data,payments,bot,events,eventsBilling,backups}}
 const DRIVE_ID_CACHE_KEY="mahdy_v7_drive_file_ids";
 let driveWriteLock=false;
 function driveIdCache(){try{return JSON.parse(localStorage.getItem(DRIVE_ID_CACHE_KEY)||"{}")}catch{return{}}}
@@ -385,11 +402,11 @@ async function getCloudHeader(){
 async function readV7Bundle(header){
   const st=await ensureDriveStructure(),read=async(name,folder)=>{const f=await findJson(name,folder.id);return f?await downloadDrive(f.id):null},manifest=header.manifest||await read("manifest.json",st.data),packages=await read("packages.json",st.data),customers=await read("customers.json",st.data),payments=[];
   for(const y of manifest?.paymentYears||[]){const d=await read(`${y}.json`,st.payments);if(Array.isArray(d?.items))payments.push(...d.items);else if(Array.isArray(d))payments.push(...d)}
-  return{schema:2,app:"MAHDY-NET Billing V7.2",revision:manifest?.revision||0,modifiedAt:manifest?.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
+  return{schema:2,app:"MAHDY-NET Billing V7.2.1",revision:manifest?.revision||0,modifiedAt:manifest?.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
 }
 async function createStructuredSafetyBackup(st,label="AUTO"){
   const year=String(new Date().getFullYear()),yearFolder=await ensureFolder(year,st.backups.id),stamp=new Date().toISOString().replace(/[:.]/g,"-"),snap=await createFolder(`${SNAPSHOT_PREFIX}${label}_${stamp}`,yearFolder.id);
-  for(const [prefix,folder] of [["data",st.data],["payments",st.payments],["bot",st.bot]]){for(const f of await listChildren(folder.id)){if(f.mimeType==="application/vnd.google-apps.folder")continue;await copyFile(f.id,`${prefix}__${f.name}`,snap.id)}}
+  for(const [prefix,folder] of [["data",st.data],["payments",st.payments],["bot",st.bot],["events",st.eventsBilling]]){for(const f of await listChildren(folder.id)){if(f.mimeType==="application/vnd.google-apps.folder")continue;await copyFile(f.id,`${prefix}__${f.name}`,snap.id)}}
   await createJson("snapshot-info.json",{schema:1,label,createdAt:nowISO()},snap.id);return snap;
 }
 async function writeBundle(bundle,{backup=true}={}){
@@ -430,7 +447,13 @@ async function restoreSnapshot(folder){
   const files=await listChildren(folder.id),map=new Map(files.map(f=>[f.name,f])),read=async n=>map.has(n)?await downloadDrive(map.get(n).id):null;
   const legacy=map.get("legacy__mahdy-net-data.json");if(legacy)return await downloadDrive(legacy.id);
   const manifest=await read("data__manifest.json");if(!manifest)throw new Error("Manifest snapshot tidak ditemukan");const packages=await read("data__packages.json"),customers=await read("data__customers.json"),payments=[];
-  for(const y of manifest.paymentYears||[]){const d=await read(`payments__${y}.json`);if(Array.isArray(d?.items))payments.push(...d.items)}return{schema:2,revision:manifest.revision||0,modifiedAt:manifest.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
+  for(const y of manifest.paymentYears||[]){const d=await read(`payments__${y}.json`);if(Array.isArray(d?.items))payments.push(...d.items)}
+  if(Number(manifest.schema||0)>=8){
+    const ev=[];for(const [name,f] of map){if(!name.startsWith("events__"))continue;try{const d=await downloadDrive(f.id);if(Array.isArray(d?.events))ev.push(...d.events);else if(d?.eventId)ev.push(d)}catch{}}
+    const botEv=await read("bot__bot-events.json");if(Array.isArray(botEv?.events))ev.push(...botEv.events);
+    if(ev.length){const merged=mergeEventSets(ev),mat=materializeLedger(merged);return{schema:8,revision:manifest.revision||0,modifiedAt:manifest.modifiedAt||null,packages:mat.packages,customers:mat.customers,payments:mat.payments,events:merged}}
+  }
+  return{schema:2,revision:manifest.revision||0,modifiedAt:manifest.modifiedAt||null,packages:packages?.items||[],customers:customers?.items||[],payments};
 }
 async function openRestore(){
   if(!googleAccessToken){toast("Hubungkan Google Drive dulu");return}try{const snaps=await findSnapshotFolders(),legacy=await driveList(`name contains '${BACKUP_PREFIX}' and trashed=false`),box=$("restoreList");box.innerHTML="";const items=[...snaps.map(f=>({type:"snapshot",f})),...legacy.map(f=>({type:"legacy",f}))].sort((a,b)=>String(b.f.modifiedTime||"").localeCompare(String(a.f.modifiedTime||"")));
@@ -439,8 +462,76 @@ async function openRestore(){
   }catch(e){alert("Gagal membaca backup: "+e.message)}
 }
 function downloadJson(data,name){const blob=new Blob([JSON.stringify(data,null,2)],{type:"application/json"}),a=document.createElement("a");a.href=URL.createObjectURL(blob);a.download=name;a.click();setTimeout(()=>URL.revokeObjectURL(a.href),1000)}
-async function exportLocal(){downloadJson(await exportData(),`MAHDY-NET_V7_${ymdLocal()}.json`)}
+async function exportLocal(){downloadJson(await exportData(),`MAHDY-NET_V8_${ymdLocal()}.json`)}
 async function importLocalFile(file){const text=await file.text(),data=JSON.parse(text),s=summary(data),local=summary(await exportData());if(!confirm(`Import file ini?\n\nFile: ${s.customers} pelanggan, ${s.payments} pembayaran\nSaat ini: ${local.customers} pelanggan, ${local.payments} pembayaran\n\nData saat ini akan diganti.`))return;if(local.customers||local.payments)downloadJson(await exportData(),`MAHDY-NET_SEBELUM_IMPORT_${ymdLocal()}.json`);await importData(data);toast("Import selesai")}
+
+
+// ============================================================
+// MAHDY-NET Billing V8.0 — Event Ledger Sync
+// Source of truth = immutable events. Materialized stores are views.
+// ============================================================
+const V8_EVENT_PREFIX="EV8";
+function simpleHash(str){let h=2166136261>>>0;for(let i=0;i<str.length;i++){h^=str.charCodeAt(i);h=Math.imul(h,16777619)>>>0}return h.toString(16).padStart(8,"0")}
+function randomToken(n=8){const a=new Uint8Array(n);crypto.getRandomValues(a);return [...a].map(x=>x.toString(16).padStart(2,"0")).join("")}
+async function getDeviceId(){let m=await getOne("meta","v8Device");if(m?.value)return m.value;const v="HP-"+randomToken(6);await put("meta",{key:"v8Device",value:v,createdAt:nowISO()});return v}
+function eventSort(a,b){const x=String(a.at||"").localeCompare(String(b.at||""));return x||String(a.eventId||"").localeCompare(String(b.eventId||""))}
+function eventFingerprint(e){return simpleHash(JSON.stringify({type:e.type,entityKey:e.entityKey,invoiceId:e.invoiceId||null,at:e.at,payload:e.payload}))}
+function normalizeEvent(e){return{schema:1,eventId:String(e.eventId),type:String(e.type),entityType:String(e.entityType||String(e.type).split(".")[0]),entityKey:String(e.entityKey||e.invoiceId||""),invoiceId:e.invoiceId?String(e.invoiceId):null,at:String(e.at||nowISO()),source:String(e.source||"billing_web"),deviceId:String(e.deviceId||"unknown"),payload:e.payload||{}}}
+async function appendLedgerEvent(type,entityKey,payload={},extra={}){const deviceId=await getDeviceId(),at=extra.at||nowISO(),eventId=extra.eventId||`${V8_EVENT_PREFIX}-${deviceId}-${Date.now().toString(36)}-${randomToken(4)}`;const e=normalizeEvent({eventId,type,entityType:String(type).split(".")[0],entityKey,invoiceId:extra.invoiceId||null,at,source:extra.source||"billing_web",deviceId,payload});await put("events",e);const st=await getState();st.revision=(st.revision||0)+1;st.modifiedAt=at;await put("meta",st);return e}
+async function allLedgerEvents(){return (await all("events")).map(normalizeEvent).sort(eventSort)}
+function nextDisplayPackageCode(items){let n=0;for(const p of items){const m=String(p.packageCode||"").match(/^P(\d+)$/);if(m)n=Math.max(n,+m[1])}return"P"+String(n+1).padStart(6,"0")}
+async function ensureSyncKeys(){const ps=await all("packages"),pkgById=new Map();let pc=0;for(const p of ps){if(!p.packageCode)p.packageCode="P"+String(++pc).padStart(6,"0");else{const m=p.packageCode.match(/^P(\d+)$/);if(m)pc=Math.max(pc,+m[1])}if(!p.syncKey)p.syncKey=`PKG-LEGACY-${String(p.id).padStart(6,"0")}`;pkgById.set(Number(p.id),p);await put("packages",p)}const cs=await all("customers");for(const c of cs){if(!c.customerCode)c.customerCode=await nextCustomerCode();if(!c.syncKey)c.syncKey=`CUS-${c.customerCode}`;const pkg=pkgById.get(Number(c.packageId));if(pkg&&!c.packageSyncKey)c.packageSyncKey=pkg.syncKey;await put("customers",c)}}
+function legacySeedEvent(type,key,payload,at,source){const raw={type,key,payload,at:at||"2000-01-01T00:00:00.000Z"};return normalizeEvent({eventId:`MIG-${simpleHash(JSON.stringify(raw))}`,type,entityType:type.split(".")[0],entityKey:key,invoiceId:type.startsWith("payment.")?key:null,at:raw.at,source,deviceId:"migration",payload})}
+function legacyEventsFromData(data,source="legacy"){const events=[],ps=Array.isArray(data?.packages)?data.packages:[],cs=Array.isArray(data?.customers)?data.customers:[],pays=Array.isArray(data?.payments)?data.payments:[],pkgIdMap=new Map();let pseq=0;for(const p0 of ps){const p={...p0},syncKey=p.syncKey||`PKG-LEGACY-${String(p.id??++pseq).padStart(6,"0")}`,packageCode=p.packageCode||`P${String(++pseq).padStart(6,"0")}`;pkgIdMap.set(Number(p.id),syncKey);events.push(legacySeedEvent("package.seed",syncKey,{syncKey,packageCode,name:p.name||"",speed:p.speed||"",price:Number(p.price||0),active:p.active!==false,createdAt:p.createdAt||null},p.updatedAt||p.createdAt||data?.modifiedAt||"2000-01-01T00:00:00.000Z",source))}for(const c0 of cs){const c={...c0},code=c.customerCode||`C${String(c.id||0).padStart(6,"0")}`,syncKey=c.syncKey||`CUS-${code}`,packageSyncKey=c.packageSyncKey||pkgIdMap.get(Number(c.packageId))||"";events.push(legacySeedEvent("customer.seed",syncKey,{syncKey,customerCode:code,name:c.name||"",whatsapp:normalizeWhatsApp(c.whatsapp||""),packageSyncKey,packageName:c.packageName||"",speed:c.speed||"",monthlyPrice:Number(c.monthlyPrice||0),customPrice:c.customPrice??null,registrationDate:c.registrationDate||"",startDate:c.startDate||"",firstBillDate:c.firstBillDate||"",active:c.active!==false,createdAt:c.createdAt||null},c.updatedAt||c.createdAt||data?.modifiedAt||"2000-01-01T00:00:00.000Z",source))}const cmap=new Map(cs.map(c=>[Number(c.id),c.customerCode||`C${String(c.id||0).padStart(6,"0")}`]));for(const p of pays){const code=cmap.get(Number(p.customerId));if(!code||!p.period)continue;const inv=`${code}-${p.period}`;events.push(legacySeedEvent("payment.paid",inv,{customerCode:code,period:p.period,amount:Number(p.amount||0),date:p.date||String(p.createdAt||data?.modifiedAt||"").slice(0,10),method:p.method||"Tunai",note:p.note||"",notifyCustomer:false,legacyPaymentId:p.id??null},p.updatedAt||p.createdAt||data?.modifiedAt||"2000-01-01T00:00:00.000Z",source))}return events}
+async function ensureV8Migration(){
+  await ensureSyncKeys();const m=await getOne("meta","v8Migration");if(m?.completed)return;
+  const data={modifiedAt:(await getState()).modifiedAt,packages:await all("packages"),customers:await all("customers"),payments:await all("payments")},before=m?.before||{packages:data.packages.length,customers:data.customers.length,payments:data.payments.length};
+  let existing=await allLedgerEvents();
+  if(existing.length){
+    const mat=materializeLedger(existing),got={packages:mat.packages.length,customers:mat.customers.length,payments:mat.payments.length};
+    if(got.packages!==before.packages||got.customers!==before.customers||got.payments!==before.payments)throw new Error(`Migrasi V8 sebelumnya belum tervalidasi. Data lama tetap dipertahankan. Sebelum ${JSON.stringify(before)}, event menghasilkan ${JSON.stringify(got)}.`);
+    await put("meta",{key:"v8Migration",completed:true,completedAt:nowISO(),before,events:existing.length,recovered:true});return;
+  }
+  await put("meta",{key:"v8PreMigrationBackup",createdAt:nowISO(),data});
+  await put("meta",{key:"v8Migration",completed:false,inProgress:true,startedAt:nowISO(),before});
+  const seeds=legacyEventsFromData(data,"local_v7_migration");
+  try{
+    for(const e of seeds)await put("events",e);
+    const mat=materializeLedger(seeds),got={packages:mat.packages.length,customers:mat.customers.length,payments:mat.payments.length};
+    if(got.packages!==before.packages||got.customers!==before.customers||got.payments!==before.payments)throw new Error(`Validasi jumlah tidak cocok. Sebelum ${JSON.stringify(before)}, hasil ${JSON.stringify(got)}`);
+    await put("meta",{key:"v8Migration",completed:true,completedAt:nowISO(),before,events:seeds.length});
+  }catch(e){await clearStore("events");await put("meta",{key:"v8Migration",completed:false,failedAt:nowISO(),before,error:String(e.message||e)});throw new Error(`Migrasi V8 dihentikan dan event parsial dibersihkan: ${e.message||e}`)}
+}
+function mergeEventSets(...sets){const map=new Map();for(const list of sets)for(const raw of list||[]){if(!raw?.eventId)continue;const e=normalizeEvent(raw),old=map.get(e.eventId);if(old&&eventFingerprint(old)!==eventFingerprint(e))throw new Error(`Konflik event ID ${e.eventId}. Sinkron dihentikan agar data tidak rusak.`);if(!old)map.set(e.eventId,e)}return [...map.values()].sort(eventSort)}
+function materializeLedger(events){const pkgs=new Map(),custs=new Map(),payStates=new Map(),sameMoment=new Map();for(const e of [...events].sort(eventSort)){const sig=`${e.entityKey}|${e.at}|${e.entityType}`;const fp=eventFingerprint(e),prior=sameMoment.get(sig);if(prior&&prior!==fp)throw new Error(`Dua perubahan berbeda terjadi pada waktu identik untuk ${e.entityKey}. Sinkron dihentikan untuk mencegah pemilihan acak.`);sameMoment.set(sig,fp);const p=e.payload||{};if(e.type==="package.seed"||e.type==="package.create"||e.type==="package.update"){const cur=pkgs.get(e.entityKey)||{syncKey:e.entityKey,active:true};pkgs.set(e.entityKey,{...cur,...p,syncKey:e.entityKey,_lastEventId:e.eventId,_lastAt:e.at})}else if(e.type==="package.delete"){const cur=pkgs.get(e.entityKey)||{syncKey:e.entityKey};pkgs.set(e.entityKey,{...cur,active:false,_lastEventId:e.eventId,_lastAt:e.at})}else if(e.type==="customer.seed"||e.type==="customer.create"||e.type==="customer.update"){const cur=custs.get(e.entityKey)||{syncKey:e.entityKey,active:true};custs.set(e.entityKey,{...cur,...p,syncKey:e.entityKey,_lastEventId:e.eventId,_lastAt:e.at})}else if(e.type==="customer.deactivate"){const cur=custs.get(e.entityKey)||{syncKey:e.entityKey};custs.set(e.entityKey,{...cur,active:false,_lastEventId:e.eventId,_lastAt:e.at})}else if(e.type==="payment.paid"||e.type==="payment.cancelled"){const inv=e.invoiceId||e.entityKey,prev=payStates.get(inv),cycle=(prev?.cycle||0)+(e.type==="payment.paid"&&prev?.status!=="paid"?1:0);payStates.set(inv,{invoiceId:inv,status:e.type==="payment.paid"?"paid":"unpaid",eventId:e.eventId,at:e.at,source:e.source,cycle,payload:p})}}
+  const codeOwner=new Map();for(const [key,c] of custs){if(!c.customerCode)continue;const old=codeOwner.get(c.customerCode);if(old&&old!==key)throw new Error(`Konflik kode pelanggan ${c.customerCode} dari dua perangkat. Sinkron dihentikan tanpa menghapus data.`);codeOwner.set(c.customerCode,key)}
+  const packages=[...pkgs.values()],customers=[...custs.values()],payments=[];const byCode=new Map(customers.map(c=>[c.customerCode,c]));for(const st of payStates.values()){if(st.status!=="paid")continue;const c=byCode.get(st.payload.customerCode);if(!c)continue;payments.push({syncKey:`PAY-${st.invoiceId}`,customerSyncKey:c.syncKey,customerCode:c.customerCode,period:st.payload.period||st.invoiceId.slice(-7),amount:Number(st.payload.amount||c.monthlyPrice||0),date:st.payload.date||String(st.at).slice(0,10),method:st.payload.method||"Tunai",note:st.payload.note||"",eventId:st.eventId,eventAt:st.at,source:st.source,cycle:st.cycle})}return{packages,customers,payments,paymentStates:[...payStates.values()]}}
+async function commitMaterialized(mat,events){const oldP=await all("packages"),oldC=await all("customers"),pId=new Map(oldP.filter(x=>x.syncKey).map(x=>[x.syncKey,x.id])),cId=new Map(oldC.filter(x=>x.syncKey).map(x=>[x.syncKey,x.id]));let pMax=oldP.reduce((m,x)=>Math.max(m,Number(x.id)||0),0),cMax=oldC.reduce((m,x)=>Math.max(m,Number(x.id)||0),0);const packages=mat.packages.map(x=>({...x,id:pId.get(x.syncKey)||++pMax}));const pMap=new Map(packages.map(x=>[x.syncKey,x]));const customers=mat.customers.map(x=>{const pkg=pMap.get(x.packageSyncKey);return{...x,id:cId.get(x.syncKey)||++cMax,packageId:pkg?.id||null,packageName:x.packageName||pkg?.name||"",speed:x.speed||pkg?.speed||"",monthlyPrice:Number(x.customPrice||x.monthlyPrice||pkg?.price||0),whatsapp:normalizeWhatsApp(x.whatsapp||"")}});const cMap=new Map(customers.map(x=>[x.customerCode,x]));let payId=0;const payments=mat.payments.map(x=>({...x,id:++payId,customerId:cMap.get(x.customerCode)?.id||null})).filter(x=>x.customerId!=null);const tx=db.transaction(["packages","customers","payments","paymentStates","events","current","summary"],"readwrite");for(const st of ["packages","customers","payments","paymentStates","events","current","summary"])tx.objectStore(st).clear();for(const x of packages)tx.objectStore("packages").put(x);for(const x of customers)tx.objectStore("customers").put(x);for(const x of payments)tx.objectStore("payments").put(x);for(const x of mat.paymentStates)tx.objectStore("paymentStates").put(x);for(const x of events)tx.objectStore("events").put(x);await new Promise((res,rej)=>{tx.oncomplete=res;tx.onerror=()=>rej(tx.error);tx.onabort=()=>rej(tx.error||new Error("Transaksi materialisasi dibatalkan"))});const seq=Math.max(0,...customers.map(c=>customerCodeNumber(c.customerCode)));await put("meta",{key:"customerSeq",value:seq});await rebuildCurrentSnapshot(true)}
+async function rematerializeLocal(){const ev=await allLedgerEvents(),mat=materializeLedger(ev);await commitMaterialized(mat,ev);await renderAll();return mat}
+async function listDriveAll(query,fields="files(id,name,mimeType,parents,modifiedTime,size)"){let out=[],token="";do{const f=`nextPageToken,${fields}`,url=`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&fields=${encodeURIComponent(f)}&pageSize=100${token?`&pageToken=${encodeURIComponent(token)}`:""}`,j=await (await driveFetch(url)).json();out.push(...(j.files||[]));token=j.nextPageToken||""}while(token);return out}
+async function ensureBotEventsFile(st){let f=await findJson("bot-events.json",st.bot.id);if(!f)f=await createJson("bot-events.json",{schema:1,events:[],updatedAt:nowISO()},st.bot.id);try{const j=await (await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}/permissions?fields=permissions(id,emailAddress,role,type)`)).json();const ok=(j.permissions||[]).some(x=>String(x.emailAddress||"").toLowerCase()===BOT_SERVICE_ACCOUNT.toLowerCase()&&["writer","owner"].includes(x.role));if(!ok)await driveFetch(`https://www.googleapis.com/drive/v3/files/${f.id}/permissions?sendNotificationEmail=false`,{method:"POST",headers:{"Content-Type":"application/json"},body:JSON.stringify({type:"user",role:"writer",emailAddress:BOT_SERVICE_ACCOUNT})})}catch(e){throw new Error(`Izin Writer service account ke bot-events.json gagal dipastikan. Sinkron dihentikan agar integrasi pembayaran tidak setengah aktif. ${e.message||e}`)}return f}
+async function readBotLedger(st){const f=await ensureBotEventsFile(st);const d=await downloadDrive(f.id);if(!d||!Array.isArray(d.events))throw new Error("bot-events.json tidak valid/tidak dapat dibaca. Sinkron dihentikan agar event bot tidak terlewat.");return{file:f,events:d.events}}
+async function readDriveBillingEvents(st){const files=await listDriveAll(`'${qEscape(st.eventsBilling.id)}' in parents and trashed=false`),events=[],errors=[];for(const f of files){if(f.mimeType==="application/vnd.google-apps.folder")continue;try{const d=await downloadDrive(f.id);if(Array.isArray(d?.events))events.push(...d.events);else if(d?.eventId)events.push(d);else errors.push(`${f.name}: format event tidak valid`)}catch(e){errors.push(`${f.name}: ${e.message||e}`)}}if(errors.length)throw new Error(`Sebagian file event Drive gagal dibaca. Sinkron dibatalkan tanpa menulis apa pun. ${errors.join(" | ")}`);return events}
+async function upsertDeviceLog(st,events){const deviceId=await getDeviceId(),mine=events.filter(e=>e.deviceId===deviceId||e.deviceId==="migration-local"||e.source==="local_v7_migration"),name=`device_${deviceId}.json`,data={schema:1,deviceId,updatedAt:nowISO(),events:mine};await upsertJson(name,data,st.eventsBilling.id)}
+async function getCloudHeaderV8(){const root=await findFolder(ROOT_FOLDER);if(root){const data=await findFolder("data",root.id);if(data){const mf=await findJson("manifest.json",data.id);if(mf){const manifest=await downloadDrive(mf.id);return{kind:Number(manifest?.schema)>=8?"v8":"v7",root,data,manifest}}}}const legacy=await findLegacyMain();if(legacy){const data=await downloadDrive(legacy.id);return{kind:"legacy",file:legacy,data,manifest:{schema:1,revision:data.revision||0,modifiedAt:data.modifiedAt||null,counts:summary(data)}}}return{kind:"empty",manifest:null}}
+async function deriveCurrentFilesForV8(st,events){const mat=materializeLedger(events);await commitMaterialized(mat,events);const state=await getState(),packages=await all("packages"),customers=await all("customers"),payments=await all("payments"),years=groupPaymentsByYear(payments),summaryFile=await buildSummaryFile(),cur=await all("current"),recentPay=events.filter(e=>e.type==="payment.paid"||e.type==="payment.cancelled").sort(eventSort).slice(-250).map(e=>({...e,payload:{...e.payload}}));const bot={schema:2,app:"MAHDY-NET Billing V8.0",generatedAt:nowISO(),revision:state.revision||0,botEventsFileId:(await ensureBotEventsFile(st)).id,customers:cur.map(r=>({invoiceId:r.invoiceId,customerId:r.customerCode,name:r.name,whatsapp:r.whatsapp||"",billingPeriod:r.billingPeriod,usagePeriod:r.usagePeriod,billingDate:r.billingDate,amount:r.amount,status:r.status==="paid"?"paid":"unpaid",paymentDate:r.paymentDate||null,paymentStateEventId:r.paymentStateEventId||null,paymentStatusAt:r.paymentStatusAt||null,paymentSource:r.paymentSource||null,paymentCycle:r.paymentCycle||0})),packages:packages.filter(p=>p.active!==false).map(p=>({id:p.packageCode||p.syncKey,name:p.name||"",speed:p.speed||"",price:Number(p.price||0),active:true})),paymentEvents:recentPay};const manifest={schema:8,app:"MAHDY-NET Billing V8.0 Event Ledger",revision:state.revision||0,modifiedAt:state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length,events:events.length,billingEvents:events.filter(e=>e.deviceId!=="wa-bot").length,botEvents:events.filter(e=>e.deviceId==="wa-bot").length},eventModel:"append-only",paymentYears:Object.keys(years).sort()};return{manifest,packages:{schema:8,items:packages},customers:{schema:8,items:customers},current:{schema:8,items:cur},summary:summaryFile,paymentYears:years,bot}}
+async function writeV8Derived(st,bundle){const oldMf=await findJson("manifest.json",st.data.id),old=oldMf?await downloadDrive(oldMf.id):null;await upsertJson("packages.json",bundle.packages,st.data.id);await upsertJson("customers.json",bundle.customers,st.data.id);await upsertJson("current.json",bundle.current,st.data.id);await upsertJson("summary.json",bundle.summary,st.data.id);const years=new Set([...(old?.paymentYears||[]),...Object.keys(bundle.paymentYears)]);for(const y of years)await upsertJson(`${y}.json`,{schema:8,year:Number(y),items:bundle.paymentYears[y]||[]},st.payments.id);await upsertJson("wa-status.json",bundle.bot,st.bot.id);await upsertJson("manifest.json",bundle.manifest,st.data.id)}
+async function syncEventLedger({showResult=true}={}){if(!googleAccessToken)throw new Error("Hubungkan Google Drive dulu");if(driveWriteLock)throw new Error("Sinkronisasi masih berjalan");driveWriteLock=true;try{await ensureV8Migration();const local=await allLedgerEvents(),st=await ensureDriveStructure(),head=await getCloudHeaderV8(),driveEvents=await readDriveBillingEvents(st),botLedger=await readBotLedger(st);if(head.kind==="v8"){const expected=Number(head.manifest?.counts?.billingEvents??0),uniqueRemote=mergeEventSets(driveEvents).length;if(expected>uniqueRemote)throw new Error(`Manifest V8 mencatat ${expected} event billing tetapi hanya ${uniqueRemote} event unik yang terbaca. Sinkron dihentikan tanpa menulis agar event tidak terlewat.`)}let legacyEvents=[];if((head.kind==="v7"||head.kind==="legacy")&&driveEvents.length===0){const data=head.kind==="legacy"?head.data:await readV7Bundle(head);legacyEvents=legacyEventsFromData(data,"drive_v7_migration").map(e=>({...e,deviceId:"migration-local"}))}let union=mergeEventSets(local,driveEvents,botLedger.events,legacyEvents);materializeLedger(union);const localBefore={customers:(await all("customers")).length,payments:(await all("payments")).length,events:local.length};if(head.kind!=="empty"){const mf=await findJson("manifest.json",st.data.id);if(mf)await createStructuredSafetyBackup(st,"V8_SEBELUM_MERGE")}await upsertDeviceLog(st,union);/* Final re-read: ambil event yang mungkin masuk dari HP lain saat proses sinkron berjalan. */const finalDrive=await readDriveBillingEvents(st),finalBot=await readBotLedger(st);union=mergeEventSets(union,finalDrive,finalBot.events);const mat=materializeLedger(union);await commitMaterialized(mat,union);const bundle=await deriveCurrentFilesForV8(st,union);await writeV8Derived(st,bundle);const report={localBefore,driveEvents:mergeEventSets(finalDrive).length,botEvents:finalBot.events.length,legacyEvents:legacyEvents.length,mergedEvents:union.length,customers:mat.customers.length,payments:mat.payments.length};await put("meta",{key:"lastV8Sync",at:nowISO(),report});if(showResult)toast(`Sinkron V8 selesai · ${union.length} event · ${mat.payments.length} lunas`);return report}finally{driveWriteLock=false}}
+
+// V8 mutations: write an event, then rematerialize. No whole-database overwrite.
+async function seedPackages(){return}
+async function savePackage(){const name=$("fPackageName").value.trim(),speed=$("fPackageSpeed").value.trim(),price=Number($("fPackagePrice").value.replace(/\D/g,""));if(!name||!speed||!price){toast("Lengkapi data paket");return}await ensureV8Migration();if(editingPackageId){const p=(await all("packages")).find(x=>x.id===editingPackageId);if(!p)return;const patch={};for(const [k,v] of Object.entries({name,speed,price}))if(String(p[k]??"")!==String(v))patch[k]=v;if(!Object.keys(patch).length){closeModal("packageFormModal");toast("Tidak ada perubahan");return}await appendLedgerEvent("package.update",p.syncKey,patch)}else{const ps=await all("packages"),syncKey="PKG-"+randomToken(10);await appendLedgerEvent("package.create",syncKey,{syncKey,packageCode:nextDisplayPackageCode(ps),name,speed,price,active:true,createdAt:nowISO()})}editingPackageId=null;await rematerializeLocal();closeModal("packageFormModal");toast("Paket disimpan sebagai event")}
+async function deletePackage(id){const p=(await all("packages")).find(x=>x.id===id);if(!p)return;if((await all("customers")).some(c=>c.active!==false&&c.packageSyncKey===p.syncKey)){alert("Paket masih digunakan pelanggan.");return}if(confirm("Nonaktifkan paket ini? Riwayat tidak akan dihapus.")){await appendLedgerEvent("package.delete",p.syncKey,{reason:"Dihapus dari Web Billing"});await rematerializeLocal();toast("Paket dinonaktifkan")}}
+async function saveCustomer(){const target=editingCustomerId,name=$("fCustomerName").value.trim(),whatsapp=normalizeWhatsApp($("fCustomerWhatsapp").value),packageId=Number($("fCustomerPackage").value),reg=$("fRegistrationDate").value,start=$("fStartDate").value,first=$("fFirstBillDate").value;if(!name||!packageId||!reg||!start||!first){toast("Lengkapi data pelanggan");return}await ensureV8Migration();const pkg=(await all("packages")).find(x=>x.id===packageId);if(!pkg)return;const customPrice=Number($("fCustomerPrice").value.replace(/\D/g,""))||null,values={name,whatsapp,packageSyncKey:pkg.syncKey,packageName:pkg.name,speed:pkg.speed,monthlyPrice:customPrice||pkg.price,customPrice,registrationDate:reg,startDate:start,firstBillDate:first};if(target!=null){const c=(await all("customers")).find(x=>x.id===target);if(!c){toast("Pelanggan tidak ditemukan");return}const patch={};for(const [k,v] of Object.entries(values))if(JSON.stringify(c[k]??null)!==JSON.stringify(v??null))patch[k]=v;if(!Object.keys(patch).length){editingCustomerId=null;closeModal("customerFormModal");toast("Tidak ada perubahan");return}await appendLedgerEvent("customer.update",c.syncKey,patch)}else{const code=await nextCustomerCode(),syncKey="CUS-"+randomToken(10);await appendLedgerEvent("customer.create",syncKey,{syncKey,customerCode:code,...values,active:true,createdAt:nowISO()})}editingCustomerId=null;await rematerializeLocal();closeModal("customerFormModal");toast("Pelanggan disimpan sebagai event")}
+async function savePayment(){if(!paymentCtx)return;await ensureV8Migration();const amount=Number($("payAmount").value.replace(/\D/g,"")),date=$("payDate").value,method=$("payMethod").value,note=$("payNote").value.trim();if(!amount||!date){toast("Lengkapi pembayaran");return}const c=paymentCtx.customer,inv=`${c.customerCode}-${paymentCtx.period}`,existing=paymentCtx.existing;if(existing&&Number(existing.amount)===amount&&existing.date===date&&existing.method===method&&String(existing.note||"")===note){closeModal("paymentModal");toast("Invoice ini sudah LUNAS dan tidak berubah");return}const pp=parsePeriod(paymentCtx.period),billDate=ymdLocal(dueDate(c,pp.year,pp.month)),usagePeriod=previousMonthKey(pp.year,pp.month);await appendLedgerEvent("payment.paid",inv,{customerCode:c.customerCode,customerName:c.name,whatsapp:c.whatsapp||"",period:paymentCtx.period,usagePeriod,billingDate:billDate,amount,date,method,note,notifyCustomer:!existing},{invoiceId:inv,source:"billing_web"});await rematerializeLocal();closeModal("paymentModal");toast("Pembayaran LUNAS tercatat. Sinkronkan Drive agar bot menerima perubahan.")}
+async function deletePayment(){if(!paymentCtx?.existing)return;const reason=prompt("Alasan pembatalan pembayaran:","Salah klik");if(reason===null)return;if(!confirm(`Batalkan pembayaran ${paymentCtx.customer.name} periode ${paymentCtx.period}?\n\nRiwayat LUNAS tidak dihapus; event pembatalan baru akan dibuat.`))return;const c=paymentCtx.customer,inv=`${c.customerCode}-${paymentCtx.period}`;const pp=parsePeriod(paymentCtx.period),billDate=ymdLocal(dueDate(c,pp.year,pp.month)),usagePeriod=previousMonthKey(pp.year,pp.month);await appendLedgerEvent("payment.cancelled",inv,{customerCode:c.customerCode,customerName:c.name,whatsapp:c.whatsapp||"",period:paymentCtx.period,usagePeriod,billingDate:billDate,amount:Number(paymentCtx.existing.amount||0),date:ymdLocal(),reason:String(reason||"Pembayaran dibatalkan"),askCustomerNotice:true,notifyCustomer:false},{invoiceId:inv,source:"billing_web"});await rematerializeLocal();closeModal("paymentModal");toast("Pembayaran dibatalkan sebagai event. Sinkronkan Drive.")}
+async function exportData(){const state=await getState();return{schema:8,app:"MAHDY-NET Billing V8.0 Event Ledger",revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all("packages"),customers:await all("customers"),payments:await all("payments"),events:await allLedgerEvents()}}
+async function importData(data,{mark=true}={}){if(!data||!Array.isArray(data.packages)||!Array.isArray(data.customers)||!Array.isArray(data.payments))throw new Error("Format backup tidak valid");for(const st of ["packages","customers","payments","paymentStates","events","current","summary"])await clearStore(st);for(const x of data.packages)await put("packages",x);for(const x of data.customers)await put("customers",x);for(const x of data.payments)await put("payments",x);if(Array.isArray(data.events))for(const e of data.events)await put("events",normalizeEvent(e));await put("meta",{key:"state",revision:Number(data.revision||0),modifiedAt:data.modifiedAt||nowISO()});await put("meta",{key:"v8Migration",completed:false});await ensureCustomerCodes();await ensureV8Migration();await rematerializeLocal();if(mark)await renderAll()}
+async function openSafeSync(){if(!googleAccessToken){toast("Hubungkan Google Drive dulu");showView("dataView");return}try{await ensureV8Migration();const local=await allLedgerEvents(),st=await ensureDriveStructure(),head=await getCloudHeaderV8(),remote=await readDriveBillingEvents(st),bot=await readBotLedger(st);const localSummary=summary(await exportData()),cc=head.manifest?.counts||{};$("localCustomerCount").textContent=`${localSummary.customers} pelanggan`;$("localPaymentCount").textContent=`${localSummary.payments} pembayaran · ${local.length} event`;$("localModified").textContent=(await getState()).modifiedAt?new Date((await getState()).modifiedAt).toLocaleString("id-ID"):"Belum ada perubahan";$("cloudCustomerCount").textContent=head.kind==="empty"?"Belum ada data":`${cc.customers??"?"} pelanggan`;$("cloudPaymentCount").textContent=head.kind==="empty"?"—":`${cc.payments??"?"} pembayaran · ${remote.length} event billing · ${bot.events.length} event bot`;$("cloudModified").textContent=head.manifest?.modifiedAt?new Date(head.manifest.modifiedAt).toLocaleString("id-ID"):head.kind.toUpperCase();const w=$("syncWarning");w.className="sync-warning good";w.innerHTML=`Sinkron V8 tidak memilih database pemenang. Sistem akan <b>menggabungkan event unik dari HP, Drive, dan WhatsApp Bot</b>, lalu menghitung ulang status final setiap invoice. Data yang tidak memiliki event penghapus tidak akan dibuang.`;$("pullDriveBtn").classList.add("hidden");$("pushDriveBtn").classList.add("hidden");$("mergeDriveBtn")?.classList.remove("hidden");openModal("syncModal")}catch(e){alert("Gagal membandingkan event: "+e.message)}}
+async function mergeDriveNow(){if(!confirm("Gabungkan event HP + Google Drive + WhatsApp Bot sekarang?\n\nTidak ada database yang ditimpa utuh. Sebelum menulis tampilan materialisasi, snapshot keamanan dibuat."))return;try{const r=await syncEventLedger();closeModal("syncModal");await renderAll();alert(`Sinkron Event Ledger selesai.\n\nEvent gabungan: ${r.mergedEvents}\nPelanggan: ${r.customers}\nInvoice LUNAS: ${r.payments}`)}catch(e){alert("Sinkron V8 dihentikan: "+e.message)}}
+async function pullFromDrive(){return mergeDriveNow()}
+async function pushToDrive(){return mergeDriveNow()}
+async function backupNow(){if(!googleAccessToken){toast("Hubungkan Google Drive dulu");return}try{const st=await ensureDriveStructure();await createStructuredSafetyBackup(st,"MANUAL_V8");toast("Snapshot V8 selesai. Event ledger tetap dipertahankan.")}catch(e){alert("Backup gagal: "+e.message)}}
 
 function showView(id){
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id===id));
@@ -462,7 +553,7 @@ $("saveCustomerBtn").addEventListener("click",saveCustomer);
 $("savePackageBtn").addEventListener("click",savePackage);
 $("savePaymentBtn").addEventListener("click",savePayment);
 $("deletePaymentBtn").addEventListener("click",deletePayment);
-$("editCustomerBtn").addEventListener("click",()=>{closeModal("customerDetailModal");openCustomerForm(editingCustomerId)});
+$("editCustomerBtn").addEventListener("click",()=>{const id=detailCustomerId;closeModal("customerDetailModal");if(id!=null)openCustomerForm(id)});
 $("fStartDate").addEventListener("change",()=>{if(!$("fStartDate").value)return;const d=new Date($("fStartDate").value+"T00:00:00");d.setMonth(d.getMonth()+1);$("fFirstBillDate").value=ymdLocal(d)});
 $("customerSearch").addEventListener("input",()=>{currentPage=1;renderCustomerTable()});
 $("paymentSearch").addEventListener("input",renderPayments);
@@ -474,13 +565,14 @@ $("disconnectDriveBtn").addEventListener("click",disconnectDrive);
 $("safeSyncBtn").addEventListener("click",openSafeSync);
 $("pullDriveBtn").addEventListener("click",pullFromDrive);
 $("pushDriveBtn").addEventListener("click",pushToDrive);
+$("mergeDriveBtn")?.addEventListener("click",mergeDriveNow);
 $("backupBtn").addEventListener("click",backupNow);
 $("restoreBtn").addEventListener("click",openRestore);
 $("exportBtn").addEventListener("click",exportLocal);
 $("importFile").addEventListener("change",async e=>{if(e.target.files[0]){try{await importLocalFile(e.target.files[0])}catch(err){alert("Import gagal: "+err.message)}e.target.value=""}});
 
 (async()=>{
-  await openDB();await ensureCustomerCodes();initYears();initDefaultDates();await seedPackages();await fillPackageSelect("fCustomerPackage");
+  await openDB();await ensureCustomerCodes();await ensureV8Migration();initYears();initDefaultDates();await fillPackageSelect("fCustomerPackage");
   const py=$("paymentYearSelect");if(py){const y=new Date().getFullYear();for(let i=y-10;i<=y+1;i++){const o=document.createElement("option");o.value=i;o.textContent=i;if(i===y)o.selected=true;py.appendChild(o)}}
   await rebuildCurrentSnapshot();updateDriveUI();await renderAll();
 })();async function migrateWhatsappFields(){
