@@ -245,9 +245,9 @@ async function renderCustomerTable(){
       if(periodCompare(selectedYear,m,first.year,first.month)<0)st="inactive";
       else if(paidSet.has(period))st="paid";
       else{const today=new Date();today.setHours(0,0,0,0);const due=dueDate(c,selectedYear,m);due.setHours(0,0,0,0);st=today<due?"future":today.getTime()===due.getTime()?"issued":"arrears"}
-      const b=document.createElement("button");b.className=`month-btn ${st}`;b.textContent=statusLabel(st);b.dataset.cid=c.id;b.dataset.month=m;
-      const isCurrentPeriod=selectedYear===new Date().getFullYear()&&m===new Date().getMonth();
-      if(st==="inactive"||(st==="future"&&!isCurrentPeriod))b.disabled=true;else b.addEventListener("click",()=>openPayment(c.id,m));td.appendChild(b);row.appendChild(td);
+      const now=new Date(),next=new Date(now.getFullYear(),now.getMonth()+1,1),isPayablePeriod=(selectedYear===now.getFullYear()&&m===now.getMonth())||(selectedYear===next.getFullYear()&&m===next.getMonth());
+      const b=document.createElement("button");b.className=`month-btn ${st}`;b.textContent=st==="future"&&isPayablePeriod?"Bayar lebih awal":statusLabel(st);b.dataset.cid=c.id;b.dataset.month=m;
+      if(st==="inactive"||(st==="future"&&!isPayablePeriod))b.disabled=true;else b.addEventListener("click",()=>openPayment(c.id,m));td.appendChild(b);row.appendChild(td);
     }
     body.appendChild(row);
   }
@@ -606,9 +606,9 @@ function customerHistoricalPrice(c,billingDate,events){
 }
 async function invoiceTimelineForCustomer(c,now=new Date(),prefetched=null){
   const events=prefetched?.events||await allLedgerEvents(),states=prefetched?.states||await all('paymentStates'),stateMap=prefetched?.stateMap||new Map(states.map(x=>[x.invoiceId,x]));
-  const first=firstBillPeriod(c),cy=now.getFullYear(),cm=now.getMonth(),today=ymdLocal(now),items=[];
-  for(let yy=first.year;yy<=cy;yy++){
-    const from=yy===first.year?first.month:0,to=yy===cy?cm:11;
+  const first=firstBillPeriod(c),cy=now.getFullYear(),cm=now.getMonth(),end=new Date(cy,cm+1,1),ey=end.getFullYear(),em=end.getMonth(),today=ymdLocal(now),items=[];
+  for(let yy=first.year;yy<=ey;yy++){
+    const from=yy===first.year?first.month:0,to=yy===ey?em:11;
     for(let mm=from;mm<=to;mm++){
       const billingPeriod=monthKey(yy,mm),billDate=ymdLocal(dueDate(c,yy,mm)),inv=invoiceId(c,yy,mm),st=stateMap.get(inv),paid=st?.status==='paid';
       let status=paid?'paid':today<billDate?'future':today===billDate?'issued':'arrears';
@@ -640,7 +640,8 @@ async function savePayment(){
   if(!paymentCtx)return;await ensureV8Migration();const amount=Number($('payAmount').value.replace(/\D/g,'')),date=$('payDate').value,method=$('payMethod').value,note=$('payNote').value.trim();if(!amount||!date){toast('Lengkapi pembayaran');return}
   const c=paymentCtx.customer,inv=`${c.customerCode}-${paymentCtx.period}`,existing=paymentCtx.existing;if(existing&&Number(existing.amount)===amount&&existing.date===date&&existing.method===method&&String(existing.note||'')===note){closeModal('paymentModal');toast('Invoice ini sudah LUNAS dan tidak berubah');return}
   const pp=parsePeriod(paymentCtx.period),billDate=ymdLocal(dueDate(c,pp.year,pp.month)),usagePeriod=previousMonthKey(pp.year,pp.month),gid=existing?.paymentGroupId||paymentGroupId();
-  await appendLedgerEvent('payment.paid',inv,{customerCode:c.customerCode,customerName:c.name,whatsapp:c.whatsapp||'',period:paymentCtx.period,usagePeriod,billingDate:billDate,amount,date,method,note,notifyCustomer:!existing,paymentGroupId:gid,paymentGroupSize:1,paymentGroupTotal:amount,paymentGroupInvoiceIds:[inv]},{invoiceId:inv,source:'billing_web'});
+  const earlyPayment=paymentCtx.invoice?.status==='future';
+  await appendLedgerEvent('payment.paid',inv,{customerCode:c.customerCode,customerName:c.name,whatsapp:c.whatsapp||'',period:paymentCtx.period,usagePeriod,billingDate:billDate,amount,date,method,note,notifyCustomer:!existing,paymentMode:earlyPayment?'early':'normal',earlyPayment,paymentGroupId:gid,paymentGroupSize:1,paymentGroupTotal:amount,paymentGroupInvoiceIds:[inv]},{invoiceId:inv,source:'billing_web'});
   await rematerializeLocal();closeModal('paymentModal');toast('Pembayaran LUNAS tercatat. Sinkronkan Drive agar bot menerima perubahan.');
 }
 async function deletePayment(){
@@ -669,7 +670,7 @@ async function saveMultiPayment(){
   if(!multiPaymentCtx)return;const selected=selectedMultiInvoices();if(!selected.length){toast('Pilih minimal satu invoice');return}const date=$('multiPayDate').value,method=$('multiPayMethod').value,note=$('multiPayNote').value.trim();if(!date){toast('Tanggal pembayaran belum diisi');return}
   const c=multiPaymentCtx.customer,gid=paymentGroupId(),total=selected.reduce((a,x)=>a+Number(x.amount||0),0),ids=selected.map(x=>x.invoiceId),notifyInvoice=[...selected].sort((a,b)=>a.billingDate.localeCompare(b.billingDate)).at(-1)?.invoiceId;
   if(!confirm(`Tandai ${selected.length} invoice sebagai LUNAS?\n\nTotal: ${money(total)}\nPayment Group: ${gid}`))return;await ensureV8Migration();const at=nowISO();
-  for(const x of selected){await appendLedgerEvent('payment.paid',x.invoiceId,{customerCode:c.customerCode,customerName:c.name,whatsapp:c.whatsapp||'',period:x.billingPeriod,usagePeriod:x.usagePeriod,billingDate:x.billingDate,amount:Number(x.amount||0),date,method,note,notifyCustomer:x.invoiceId===notifyInvoice,paymentGroupId:gid,paymentGroupSize:selected.length,paymentGroupTotal:total,paymentGroupInvoiceIds:ids,paymentGroupUsagePeriods:selected.map(i=>i.usagePeriod),paymentGroupBillingDates:selected.map(i=>i.billingDate)},{invoiceId:x.invoiceId,source:'billing_web',at});}
+  for(const x of selected){const earlyPayment=x.status==='future';await appendLedgerEvent('payment.paid',x.invoiceId,{customerCode:c.customerCode,customerName:c.name,whatsapp:c.whatsapp||'',period:x.billingPeriod,usagePeriod:x.usagePeriod,billingDate:x.billingDate,amount:Number(x.amount||0),date,method,note,notifyCustomer:x.invoiceId===notifyInvoice,paymentMode:earlyPayment?'early':'normal',earlyPayment,paymentGroupId:gid,paymentGroupSize:selected.length,paymentGroupTotal:total,paymentGroupInvoiceIds:ids,paymentGroupUsagePeriods:selected.map(i=>i.usagePeriod),paymentGroupBillingDates:selected.map(i=>i.billingDate)},{invoiceId:x.invoiceId,source:'billing_web',at});}
   await rematerializeLocal();closeModal('multiPaymentModal');closeModal('customerDetailModal');multiPaymentCtx=null;toast(`${selected.length} invoice LUNAS · ${gid}`);
 }
 
