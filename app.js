@@ -246,7 +246,8 @@ async function renderCustomerTable(){
       else if(paidSet.has(period))st="paid";
       else{const today=new Date();today.setHours(0,0,0,0);const due=dueDate(c,selectedYear,m);due.setHours(0,0,0,0);st=today<due?"future":today.getTime()===due.getTime()?"issued":"arrears"}
       const b=document.createElement("button");b.className=`month-btn ${st}`;b.textContent=statusLabel(st);b.dataset.cid=c.id;b.dataset.month=m;
-      if(st==="future"||st==="inactive")b.disabled=true;else b.addEventListener("click",()=>openPayment(c.id,m));td.appendChild(b);row.appendChild(td);
+      const isCurrentPeriod=selectedYear===new Date().getFullYear()&&m===new Date().getMonth();
+      if(st==="inactive"||(st==="future"&&!isCurrentPeriod))b.disabled=true;else b.addEventListener("click",()=>openPayment(c.id,m));td.appendChild(b);row.appendChild(td);
     }
     body.appendChild(row);
   }
@@ -618,10 +619,11 @@ async function invoiceTimelineForCustomer(c,now=new Date(),prefetched=null){
   return items;
 }
 async function invoiceContextForCustomer(c,now=new Date(),prefetched=null){
-  const invoices=await invoiceTimelineForCustomer(c,now,prefetched),outstanding=invoices.filter(x=>x.status==='issued'||x.status==='arrears'),issued=invoices.filter(x=>x.status!=='future'),latestIssued=issued.at(-1)||null,current=invoices.find(x=>x.billingPeriod===monthKey(now.getFullYear(),now.getMonth()))||null;
+  const invoices=await invoiceTimelineForCustomer(c,now,prefetched),outstanding=invoices.filter(x=>x.status==='issued'||x.status==='arrears'),payable=invoices.filter(x=>x.status!=='paid'),issued=invoices.filter(x=>x.status!=='future'),latestIssued=issued.at(-1)||null,current=invoices.find(x=>x.billingPeriod===monthKey(now.getFullYear(),now.getMonth()))||null;
   let example=null;
   if(latestIssued){const nextPeriod=nextMonthPeriod(latestIssued.billingPeriod),np=parsePeriod(nextPeriod);example={invoiceId:latestIssued.invoiceId,billingDate:latestIssued.billingDate,billingPeriod:latestIssued.billingPeriod,usagePeriod:latestIssued.usagePeriod,currentUsagePeriod:latestIssued.billingPeriod,nextBillingPeriod:nextPeriod,nextBillingDate:ymdLocal(dueDate(c,np.year,np.month))}}
-  return{invoices,outstanding,latestIssued,current,outstandingCount:outstanding.length,outstandingTotal:outstanding.reduce((a,x)=>a+Number(x.amount||0),0),example};
+  // Invoice future boleh dibayar lebih awal, tetapi tetap bukan tunggakan.
+  return{invoices,outstanding,payable,latestIssued,current,outstandingCount:outstanding.length,outstandingTotal:outstanding.reduce((a,x)=>a+Number(x.amount||0),0),payableCount:payable.length,payableTotal:payable.reduce((a,x)=>a+Number(x.amount||0),0),example};
 }
 
 async function buildCurrentRecord(c,now=new Date(),prefetched=null){
@@ -651,14 +653,14 @@ async function deletePayment(){
 async function openCustomerDetail(id){
   detailCustomerId=id;const c=(await all('customers')).find(x=>x.id===id);if(!c)return;const ctx=await invoiceContextForCustomer(c);$('detailCustomerName').textContent=c.name;
   $('detailCustomerInfo').innerHTML=`<div class="detail-grid"><div class="detail-cell"><span>Paket</span><b>${c.packageName} · ${c.speed}</b></div><div class="detail-cell"><span>Tarif saat ini</span><b>${money(c.monthlyPrice)}</b></div><div class="detail-cell"><span>WhatsApp</span><b>${c.whatsapp||'-'}</b></div><div class="detail-cell"><span>Registrasi</span><b>${c.registrationDate}</b></div><div class="detail-cell"><span>Mulai layanan</span><b>${c.startDate}</b></div><div class="detail-cell"><span>Tagihan pertama</span><b>${c.firstBillDate}</b></div><div class="detail-cell"><span>Belum lunas</span><b>${ctx.outstandingCount} invoice · ${money(ctx.outstandingTotal)}</b></div><div class="detail-cell"><span>Tagihan terbaru terbit</span><b>${ctx.latestIssued?`${periodLabel(ctx.latestIssued.usagePeriod)} · ${ctx.latestIssued.billingDate}`:'Belum ada'}</b></div></div>`;
-  const btn=$('multiPaymentOpenBtn');if(btn){btn.disabled=ctx.outstandingCount===0;btn.textContent=ctx.outstandingCount?`✓ Lunasi beberapa tagihan (${ctx.outstandingCount})`:'✓ Tidak ada tagihan belum lunas'}
+  const btn=$('multiPaymentOpenBtn');if(btn){btn.disabled=ctx.payableCount===0;btn.textContent=ctx.payableCount?`✓ Lunasi tagihan (${ctx.payableCount})`:'✓ Tidak ada tagihan yang dapat dilunasi'}
   const ps=(await paymentsForCustomer(id)).sort((a,b)=>b.period.localeCompare(a.period)),hist=$('detailPaymentHistory');hist.innerHTML='';if(!ps.length)hist.innerHTML='<div class="empty-state">Belum ada pembayaran.</div>';
   ps.forEach(p=>{const {year,month}=parsePeriod(p.period),d=document.createElement('div');d.className='history-row';d.innerHTML=`<div><b>${MONTHS[month]} ${year}</b><small>${p.date} · ${p.method}${p.paymentGroupId?` · ${p.paymentGroupId}`:''}</small></div><b>${money(p.amount)}</b>`;hist.appendChild(d)});openModal('customerDetailModal');
 }
 async function openMultiPayment(){
-  if(!detailCustomerId)return;const c=(await all('customers')).find(x=>x.id===detailCustomerId);if(!c)return;const ctx=await invoiceContextForCustomer(c),items=ctx.outstanding;
-  if(!items.length){toast('Tidak ada invoice belum lunas');return}multiPaymentCtx={customer:c,items};$('multiPaymentTitle').textContent=`${c.name} · Pilih tagihan`;$('multiPayDate').value=ymdLocal();$('multiPayMethod').value='Tunai';$('multiPayNote').value='';const box=$('multiInvoiceList');box.innerHTML='';
-  for(const x of items){const row=document.createElement('label');row.className='multi-invoice-row';row.innerHTML=`<input type="checkbox" class="multi-invoice-check" data-invoice="${x.invoiceId}" checked><div class="multi-invoice-copy"><b>Pemakaian ${periodLabel(x.usagePeriod)}</b><small>Tagihan terbit ${x.billingDate} · ${x.status==='arrears'?'Tunggak':'Tagihan terbit'}</small></div><span class="multi-invoice-amount">${money(x.amount)}</span>`;box.appendChild(row)}
+  if(!detailCustomerId)return;const c=(await all('customers')).find(x=>x.id===detailCustomerId);if(!c)return;const ctx=await invoiceContextForCustomer(c),items=ctx.payable;
+  if(!items.length){toast('Tidak ada invoice yang dapat dilunasi');return}multiPaymentCtx={customer:c,items};$('multiPaymentTitle').textContent=`${c.name} · Pilih tagihan`;$('multiPayDate').value=ymdLocal();$('multiPayMethod').value='Tunai';$('multiPayNote').value='';const box=$('multiInvoiceList');box.innerHTML='';
+  for(const x of items){const row=document.createElement('label');row.className='multi-invoice-row';const label=x.status==='future'?'Bisa dibayar lebih awal':(x.status==='arrears'?'Tunggak':'Tagihan terbit');row.innerHTML=`<input type="checkbox" class="multi-invoice-check" data-invoice="${x.invoiceId}" checked><div class="multi-invoice-copy"><b>Pemakaian ${periodLabel(x.usagePeriod)}</b><small>Jatuh tempo ${x.billingDate} · ${label}</small></div><span class="multi-invoice-amount">${money(x.amount)}</span>`;box.appendChild(row)}
   box.querySelectorAll('.multi-invoice-check').forEach(el=>el.addEventListener('change',updateMultiPaymentTotal));updateMultiPaymentTotal();openModal('multiPaymentModal');
 }
 function selectedMultiInvoices(){if(!multiPaymentCtx)return[];const ids=new Set([...document.querySelectorAll('.multi-invoice-check:checked')].map(x=>x.dataset.invoice));return multiPaymentCtx.items.filter(x=>ids.has(x.invoiceId))}
@@ -711,8 +713,8 @@ function buildPaymentGroups(events){
 async function deriveCurrentFilesForV8(st,events){
   const state=await getState(),packages=await all('packages'),customers=await all('customers'),payments=await all('payments'),years=groupPaymentsByYear(payments),summaryFile=await buildSummaryFile(),cur=await all('current'),curMap=new Map(cur.map(x=>[x.customerCode,x])),states=await all('paymentStates'),pref={events,states,stateMap:new Map(states.map(x=>[x.invoiceId,x]))},botFile=await ensureBotEventsFile(st),botCustomers=[];
   for(const c of customers.filter(x=>x.active!==false)){
-    const ctx=await invoiceContextForCustomer(c,new Date(),pref),r=curMap.get(c.customerCode)||{},out=ctx.outstanding.map(x=>({...x,billingState:x.status,status:'unpaid'})),latest=ctx.latestIssued;
-    botCustomers.push({invoiceId:r.invoiceId||ctx.current?.invoiceId||null,customerId:c.customerCode,name:c.name,whatsapp:c.whatsapp||'',billingPeriod:r.billingPeriod||ctx.current?.billingPeriod||null,usagePeriod:r.usagePeriod||ctx.current?.usagePeriod||null,billingDate:r.billingDate||ctx.current?.billingDate||null,amount:Number(r.amount||ctx.current?.amount||c.monthlyPrice||0),status:r.status==='paid'?'paid':'unpaid',paymentDate:r.paymentDate||null,paymentStateEventId:r.paymentStateEventId||null,paymentStatusAt:r.paymentStatusAt||null,paymentSource:r.paymentSource||null,paymentCycle:Number(r.paymentCycle||0),billingDay:new Date(c.firstBillDate+'T00:00:00').getDate(),outstandingInvoices:out,outstandingCount:ctx.outstandingCount,outstandingTotal:ctx.outstandingTotal,outstandingInvoiceIds:out.map(x=>x.invoiceId),latestOutstandingInvoice:out.at(-1)||null,latestIssuedInvoice:latest||null,pascaBayarExample:ctx.example,dynamicMessage:{mode:'adaptive-single-multiple',unpaid:{invoiceCount:ctx.outstandingCount,total:ctx.outstandingTotal,invoices:out,example:ctx.example}}});
+    const ctx=await invoiceContextForCustomer(c,new Date(),pref),r=curMap.get(c.customerCode)||{},out=ctx.outstanding.map(x=>({...x,billingState:x.status,status:'unpaid'})),payable=ctx.payable.map(x=>({...x,billingState:x.status,status:'unpaid'})),latest=ctx.latestIssued;
+    botCustomers.push({invoiceId:r.invoiceId||ctx.current?.invoiceId||null,customerId:c.customerCode,name:c.name,whatsapp:c.whatsapp||'',billingPeriod:r.billingPeriod||ctx.current?.billingPeriod||null,usagePeriod:r.usagePeriod||ctx.current?.usagePeriod||null,billingDate:r.billingDate||ctx.current?.billingDate||null,amount:Number(r.amount||ctx.current?.amount||c.monthlyPrice||0),status:r.status==='paid'?'paid':'unpaid',paymentDate:r.paymentDate||null,paymentStateEventId:r.paymentStateEventId||null,paymentStatusAt:r.paymentStatusAt||null,paymentSource:r.paymentSource||null,paymentCycle:Number(r.paymentCycle||0),billingDay:new Date(c.firstBillDate+'T00:00:00').getDate(),outstandingInvoices:out,outstandingCount:ctx.outstandingCount,outstandingTotal:ctx.outstandingTotal,outstandingInvoiceIds:out.map(x=>x.invoiceId),latestOutstandingInvoice:out.at(-1)||null,earlyPaymentInvoices:payable,earlyPaymentCount:ctx.payableCount,earlyPaymentTotal:ctx.payableTotal,latestIssuedInvoice:latest||null,pascaBayarExample:ctx.example,dynamicMessage:{mode:'adaptive-single-multiple',unpaid:{invoiceCount:ctx.outstandingCount,total:ctx.outstandingTotal,invoices:out,example:ctx.example}}});
   }
   const recentPay=events.filter(e=>e.type==='payment.paid'||e.type==='payment.cancelled').sort(eventSort).slice(-500).map(e=>({...e,payload:{...e.payload}})),paymentGroups=buildPaymentGroups(events),maxAt=events.length?[...events].sort(eventSort).at(-1).at:null;
   const bot={schema:WA_STATUS_SCHEMA,app:'MAHDY-NET Billing V8.1',generatedAt:nowISO(),revision:state.revision||0,botEventsFileId:botFile.id,templateCapabilities:{version:1,mode:'adaptive-single-multiple',templates:['dynamic_bill_unpaid','dynamic_bill_paid'],variables:['nama','jumlah_invoice','rincian_invoice','total_tagihan','tanggal_terbit_terbaru','periode_pemakaian_terbaru','periode_tagihan_terbaru','tanggal_tagihan_berikutnya','tanda_tangan']},customers:botCustomers,packages:packages.filter(p=>p.active!==false).map(p=>({id:p.packageCode||p.syncKey,name:p.name||'',speed:p.speed||'',price:Number(p.price||0),active:true})),paymentEvents:recentPay,paymentGroups};
@@ -798,5 +800,3 @@ $("importFile").addEventListener("change",async e=>{if(e.target.files[0]){try{aw
   for(const c of cs){const n=normalizeWhatsApp(c.whatsapp||"");if(c.whatsapp!==n){c.whatsapp=n;await put("customers",c);changed=true}}
   return changed;
 }
-
-
