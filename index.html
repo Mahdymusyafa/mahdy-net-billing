@@ -7,21 +7,23 @@
   <meta http-equiv="Pragma" content="no-cache">
   <meta http-equiv="Expires" content="0">
   <meta name="theme-color" content="#f5f8fc">
-  <title>MAHDY-NET Billing V8.3 Ultra Fast Sync</title>
-  <link rel="stylesheet" href="styles.css?v=8.3-ultra-fast">
+  <title>MAHDY-NET Billing V8.3.3</title>
+  <link rel="icon" type="image/svg+xml" href="assets/favicon.svg?v=8.3.3">
+  <link rel="shortcut icon" href="assets/favicon.svg?v=8.3.3">
+  <link rel="stylesheet" href="styles.css?v=8.3.3-light-assets">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
 <div class="app-shell">
   <header class="topbar">
     <div class="brand">
-      <div class="logo-frame"><img src="assets/logo-mahdy-net.png" alt="MAHDY-NET"></div>
+      <div class="logo-frame"><img src="assets/logo-mahdy-net.webp" alt="MAHDY-NET" width="792" height="264"></div>
       <div class="brand-copy">
-        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.3</small></h1>
+        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.3.3</small></h1>
         <span id="localSaveStatus">Auto-save aktif</span>
       </div>
     </div>
-    <button class="top-drive-pill" id="topDrivePill" type="button"><span class="drive-triangle">▲</span><span><b>Google Drive</b><small id="topDriveText">Belum terhubung</small></span><i>›</i></button>
+    <button class="top-drive-pill" id="topDrivePill" type="button"><span class="drive-triangle"><img src="assets/google-drive.svg" alt=""></span><span><b>Google Drive</b><small id="topDriveText">Belum terhubung</small></span><i>›</i></button>
     <button class="icon-btn primary" id="quickAddCustomer" title="Tambah pelanggan">＋</button>
   </header>
 
@@ -48,9 +50,9 @@
           <small>bulan ini</small>
         </article>
         <article class="stat-card amber">
-          <span>Tagihan terbit</span>
+          <span>Jatuh tempo hari ini</span>
           <strong id="statIssued">0</strong>
-          <small>belum dibayar</small>
+          <small>belum dibayar hari ini</small>
         </article>
         <article class="stat-card red">
           <span>Menunggak</span>
@@ -158,7 +160,7 @@
 
       <div class="drive-card">
         <div class="drive-head">
-          <div class="drive-icon">G</div>
+          <div class="drive-icon"><img src="assets/google-drive.svg" alt="Google Drive"></div>
           <div>
             <strong>Google Drive & Backup</strong>
             <p id="driveStatusText">Belum terhubung</p>
@@ -191,7 +193,7 @@
 
       <div class="safety-note">
         <strong>Pengaman aktif</strong>
-        <p>V8.3 memakai Fast No-Change Mode. Jika sidik data HP, Drive, dan bot sama, sinkron selesai tanpa menulis ulang file. Event Ledger tetap memakai schema 8.</p>
+        <p>V8.3.3 memakai Fast No-Change Mode. Jika sidik data HP, Drive, dan bot sama, sinkron selesai tanpa menulis ulang file. Event Ledger tetap memakai schema 8.</p>
       </div>
     </section>
   </main>
@@ -200,7 +202,7 @@
     <button class="nav-item active" data-view="homeView"><span>⌂</span><b>Beranda</b></button>
     <button class="nav-item" data-view="customersView"><span>♙</span><b>Pelanggan</b></button>
     <button class="nav-item" data-view="packagesView"><span>▦</span><b>Paket</b></button>
-    <button class="nav-item" data-view="dataView"><span>☁</span><b>Data</b></button>
+    <button class="nav-item" data-view="dataView"><span><img class="nav-drive-logo" src="assets/google-drive.svg" alt=""></span><b>Data</b></button>
   </nav>
 </div>
 
@@ -308,6 +310,6 @@
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="app.js?v=8.3-ultra-fast"></script>
+<script src="app.js?v=8.3.3-light-assets"></script>
 </body>
 </html>

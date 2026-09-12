@@ -1,4 +1,26 @@
-# MAHDY-NET Billing V8.3 — Ultra Fast No-Change Sync
+# MAHDY-NET Billing V8.3.3 — Favicon + Aset Ringan
+
+## Tambalan V8.3.3
+
+- Menambahkan `assets/favicon.svg` sebagai ikon tab/browser.
+- Logo MAHDY-NET dikonversi dari PNG 1,1 MB menjadi WebP sekitar 18 KB.
+- Tampilan logo tetap mengikuti aset asli, termasuk efek visualnya.
+- Penanda cache aset dinaikkan agar browser langsung mengambil logo dan favicon baru.
+
+## Tambalan V8.3.2
+
+- Menambahkan aset vektor `assets/google-drive.svg`.
+- Logo Google Drive dipasang pada header, kartu koneksi, dan navigasi Data.
+- Logo tetap tajam pada layar HP beresolusi tinggi tanpa memperlambat halaman.
+
+## Tambalan V8.3.1
+
+- Bulan yang belum tersedia ditampilkan sebagai **Belum bisa dibayar**.
+- Siklus aktif sebelum tanggal jatuh tempo ditampilkan sebagai **Belum jatuh tempo**.
+- Pada tanggal jatuh tempo ditampilkan sebagai **Jatuh tempo hari ini**.
+- Setelah tanggal jatuh tempo dan belum lunas ditampilkan sebagai **Menunggak**.
+- Kartu pelanggan biasa hanya menampilkan tanggal lengkap tanpa awalan tambahan.
+- Rincian hasil pencarian tetap menampilkan keterangan jatuh tempo secara lengkap.
 
 V8.2 adalah patch tampilan dan pengalaman penggunaan di atas mesin Event Ledger V8.1. Schema data tetap **8**, sehingga data pelanggan, paket, pembayaran, cache, `wa-status.json`, dan `bot-events.json` lama tetap kompatibel.
 
