@@ -101,6 +101,11 @@ button{cursor:pointer}
   color:var(--muted);
   font-weight:700;
 }
+.top-drive-pill{display:flex;align-items:center;gap:9px;padding:8px 11px;border:1px solid #dbe5f1;border-radius:18px;background:linear-gradient(145deg,#fff,#f5f9fd);color:var(--text);box-shadow:7px 7px 16px rgba(52,79,112,.10),-6px -6px 14px rgba(255,255,255,.92)}
+.top-drive-pill>span:nth-child(2){display:grid;text-align:left}.top-drive-pill b{font-size:11px}.top-drive-pill small{font-size:9px;color:var(--muted);margin-top:2px}.top-drive-pill.connected small{color:#1e9a59}.top-drive-pill i{font-size:20px;color:#7f8fa3;font-style:normal}.drive-triangle{display:grid;place-items:center;width:25px;height:25px;border-radius:8px;color:#2f72e8;background:#eef5ff;font-size:13px}
+.customer-page-hero{display:flex;align-items:center;gap:12px;margin:8px 3px 18px}.customer-hero-icon{display:grid;place-items:center;width:62px;height:62px;border:1px solid rgba(255,255,255,.9);border-radius:21px;color:var(--blue);font-size:31px;background:linear-gradient(145deg,#fff,#edf5fe);box-shadow:9px 9px 20px rgba(47,85,125,.10),-8px -8px 18px rgba(255,255,255,.9)}
+.customer-hero-copy{min-width:0;flex:1}.customer-hero-copy h2{margin:0;font-size:27px;letter-spacing:-.7px}.customer-hero-copy p{margin:5px 0 0;color:var(--muted);font-size:12px}.customer-total-pill{display:grid;grid-template-columns:auto auto auto;grid-template-rows:auto auto;align-items:center;column-gap:8px;padding:9px 12px;border:1px solid #dfe8f2;border-radius:19px;background:linear-gradient(145deg,#fff,#f4f8fc);box-shadow:7px 7px 17px rgba(49,76,109,.09),-6px -6px 14px #fff;color:var(--text)}.customer-total-pill span{grid-row:1/3;display:grid;place-items:center;width:32px;height:32px;border-radius:11px;background:#eaf3ff;color:var(--blue);font-size:18px}.customer-total-pill small{font-size:9px;color:var(--muted)}.customer-total-pill b{font-size:17px;text-align:left}.customer-total-pill i{grid-column:3;grid-row:1/3;font-style:normal;font-size:20px;color:#7f8fa3}.desktop-add{margin-left:2px}
+.mobile-filter-actions,.mobile-month-toolbar,.mobile-customer-list{display:none}
 .icon-btn{
   width:48px;
   height:48px;
@@ -1030,20 +1035,17 @@ tbody tr:hover td:first-child,tbody tr:hover td:nth-child(2){background:#fbfdff}
   .safe-sync-card .btn{grid-column:1/-1}
 }
 @media(max-width:560px){
-  .app-shell{padding:10px 10px 94px}
+  .app-shell{padding:10px 10px 126px}
   .topbar{
-    top:6px;
-    margin-bottom:14px;
-    border-radius:20px;
-    padding:10px 11px;
+    position:relative;top:auto;margin-bottom:20px;border-radius:24px;padding:10px;gap:7px;
+    background:linear-gradient(145deg,rgba(255,255,255,.96),rgba(241,247,253,.96));
+    box-shadow:10px 12px 28px rgba(45,76,111,.13),-6px -6px 18px rgba(255,255,255,.95),inset 0 1px 0 #fff;
   }
   .logo-frame{
-    width:182px;
-    height:50px;
-    border-radius:16px;
+    width:145px;height:52px;border-radius:17px;box-shadow:6px 7px 15px rgba(48,79,113,.12),-5px -5px 12px #fff;
   }
   .brand-copy{display:none}
-  .icon-btn{width:44px;height:44px;border-radius:15px}
+  .brand{min-width:0;flex:1}.icon-btn{width:48px;height:48px;border-radius:17px;flex:0 0 auto}.top-drive-pill{padding:7px 8px;gap:6px;border-radius:16px}.top-drive-pill b{font-size:9px}.top-drive-pill small{font-size:8px}.top-drive-pill i{display:none}.drive-triangle{width:24px;height:24px}
   .hero{
     display:block;
     padding:20px 16px;
@@ -1091,7 +1093,15 @@ tbody tr:hover td:first-child,tbody tr:hover td:nth-child(2){background:#fbfdff}
   .status-pill{flex:0 0 auto;padding:7px 9px}
   .pager{align-items:flex-start;flex-direction:column}
   .pager>div{width:100%;overflow:auto;padding-bottom:2px}
+
+  .customer-page-hero{gap:10px;margin:4px 4px 18px}.customer-hero-icon{width:54px;height:54px;border-radius:19px;font-size:27px}.customer-hero-copy h2{font-size:25px}.customer-hero-copy p{font-size:10px;line-height:1.35}.customer-total-pill{padding:8px 9px;border-radius:17px;column-gap:6px}.customer-total-pill span{width:29px;height:29px}.customer-total-pill small{font-size:8px}.customer-total-pill b{font-size:16px}.customer-total-pill i{display:none}.desktop-add{display:none}
+  #customersView .filter-card{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:8px;padding:11px;margin-bottom:10px}.mobile-filter-actions{display:flex;gap:7px}.filter-select{position:relative;display:flex;align-items:center;gap:4px;padding:0 7px;border:1px solid var(--line);border-radius:14px;background:linear-gradient(145deg,#fff,#f5f8fc);box-shadow:5px 6px 13px rgba(49,77,110,.07)}.filter-select>span{font-size:15px;color:#304158}.filter-select select{width:70px;padding:11px 2px;border:0;background:transparent;box-shadow:none;font-size:10px}.searchbox{min-width:0;border-radius:16px;box-shadow:inset 2px 2px 5px rgba(55,82,110,.04),5px 6px 13px rgba(55,82,110,.05)}.searchbox input{min-width:0;font-size:12px}.filter-row{display:none}.customer-focus{display:none}
+  #customersView .table-card{border-radius:23px;overflow:hidden;background:rgba(255,255,255,.78)}.mobile-month-toolbar{display:grid;grid-template-columns:40px minmax(105px,1fr) 40px auto auto;align-items:center;gap:6px;padding:10px;border-bottom:1px solid var(--line);background:linear-gradient(180deg,#fbfdff,#f5f9fd)}.mobile-month-toolbar button{height:38px;border:1px solid #dde7f2;border-radius:13px;background:linear-gradient(145deg,#fff,#edf4fb);color:var(--blue);font-size:25px;box-shadow:5px 6px 12px rgba(48,76,108,.08)}.mobile-month-toolbar strong{text-align:center;padding:10px 7px;border-radius:13px;background:#eaf3ff;color:var(--blue);font-size:12px}.mobile-legend{padding:8px 7px;border-radius:12px;font-size:9px;font-weight:900;white-space:nowrap}.mobile-legend.paid{color:var(--green);background:var(--green-soft)}.mobile-legend.unpaid{color:var(--amber);background:var(--amber-soft)}
+  .month-scroller-note,.table-wrap{display:none}.mobile-customer-list{display:grid;gap:8px;padding:9px;background:linear-gradient(180deg,rgba(244,249,254,.86),rgba(237,245,252,.75))}.mobile-customer-card{display:grid;grid-template-columns:40px minmax(78px,1.25fr) minmax(62px,.78fr) minmax(88px,1fr) 34px;align-items:center;gap:5px;padding:9px 7px;border:1px solid rgba(224,233,243,.9);border-radius:18px;background:linear-gradient(145deg,#fff,#f8fbfe);box-shadow:6px 7px 15px rgba(47,76,108,.08),-3px -3px 10px rgba(255,255,255,.9)}.mobile-row-number{display:grid;place-items:center;width:37px;height:42px;border-radius:14px;background:linear-gradient(145deg,#f5f9fd,#e7f0f9);font-size:16px}.mobile-customer-name{min-width:0;padding:0;border:0;background:none;text-align:left;color:var(--text)}.mobile-customer-name b,.mobile-package b{display:block;overflow:hidden;text-overflow:ellipsis;font-size:12px;white-space:nowrap}.mobile-customer-name small,.mobile-package small{display:block;margin-top:4px;color:var(--muted);font-size:9px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}.mobile-month-status{min-width:0;padding:7px 5px;border:0;border-radius:14px;background:#f1f6fc;color:#718094}.mobile-month-status b{display:block;font-size:10px;white-space:nowrap}.mobile-month-status small{display:block;margin-top:3px;font-size:8px;white-space:nowrap}.mobile-month-status.paid{background:linear-gradient(145deg,#edf9f3,#dff5e9);color:var(--green)}.mobile-month-status.arrears{background:var(--red-soft);color:var(--red)}.mobile-month-status.issued{background:var(--amber-soft);color:var(--amber)}.mobile-more{width:34px;height:40px;border:1px solid #dfe8f2;border-radius:14px;background:linear-gradient(145deg,#fff,#f1f6fb);font-size:20px;color:#20314a;box-shadow:4px 5px 10px rgba(50,77,108,.07)}
+  #customersView .pager{padding:12px 10px;background:rgba(255,255,255,.86)}#customersView .pager>span{font-size:9px}
+  .bottom-nav{bottom:10px;padding:9px;border-radius:25px;box-shadow:0 20px 42px rgba(32,60,94,.18),inset 0 1px 0 #fff}.nav-item{padding:10px 5px;border-radius:18px}.nav-item.active{box-shadow:inset 3px 3px 7px rgba(67,110,165,.06),inset -3px -3px 7px #fff}
 }
+@media(max-width:380px){.top-drive-pill>span:nth-child(2){display:none}.logo-frame{width:158px}.mobile-month-toolbar{grid-template-columns:36px 1fr 36px auto}.mobile-legend.unpaid{display:none}.mobile-customer-card{grid-template-columns:36px minmax(72px,1.2fr) minmax(58px,.72fr) minmax(82px,1fr) 32px;padding-left:5px;padding-right:5px}.mobile-row-number{width:34px}.mobile-package small{font-size:8px}}
 
 /* V8.1 dynamic multi-invoice payment */
 .multi-pay-note{padding:12px 14px;border-radius:14px;background:var(--soft-blue,#eef6ff);border:1px solid var(--line);font-size:12px;line-height:1.55;margin-bottom:12px}

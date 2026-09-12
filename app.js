@@ -7,15 +7,17 @@ const DRIVE_SCOPE="https://www.googleapis.com/auth/drive.file";
 const LEGACY_MAIN_FILE="mahdy-net-data.json";
 const ROOT_FOLDER="MAHDY-NET Billing";
 const V8_SCHEMA=8;
-const APP_VERSION="8.1";
+const APP_VERSION="8.3";
 const WA_STATUS_SCHEMA=3;
 const BOT_SERVICE_ACCOUNT="mahdy-net-bot@mahdy-net-billing.iam.gserviceaccount.com";
 const BACKUP_PREFIX="MAHDY-NET_Backup_";
 const SNAPSHOT_PREFIX="SNAPSHOT_";
 let db,currentPage=1,selectedYear=new Date().getFullYear(),editingCustomerId=null,detailCustomerId=null,editingPackageId=null,paymentCtx=null;
+let mobileSelectedMonth=new Date().getMonth();
 let googleTokenClient=null,googleAccessToken=null,cloudSnapshot=null;
 const GOOGLE_SESSION_KEY="mahdy_google_session_v1";
 let googleAccountLabel="";
+let pendingAccountSwitch=false;
 
 const $=id=>document.getElementById(id);
 function money(n){return new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(Number(n||0))}
@@ -231,27 +233,41 @@ async function saveCustomer(){
   toast("Pelanggan disimpan");
 }
 
+function customerMonthState(c,year,month,paidSet){
+  const period=monthKey(year,month),first=firstBillPeriod(c);if(periodCompare(year,month,first.year,first.month)<0)return'inactive';if(paidSet.has(period))return'paid';
+  const today=new Date();today.setHours(0,0,0,0);const due=dueDate(c,year,month);due.setHours(0,0,0,0);return today<due?'future':today.getTime()===due.getTime()?'issued':'arrears';
+}
 async function renderCustomerTable(){
   const tr=$("customerHeader");while(tr.children.length>2)tr.removeChild(tr.lastChild);
   MONTHS.forEach(m=>{const th=document.createElement("th");th.textContent=m;tr.appendChild(th)});
   const q=$("customerSearch").value.trim().toLowerCase();
-  const customers=(await all("customers")).filter(c=>c.active!==false&&c.name.toLowerCase().includes(q));
+  const activeCustomers=(await all("customers")).filter(c=>c.active!==false);$('customerTotalCount').textContent=activeCustomers.length;
+  let customers=activeCustomers.filter(c=>c.name.toLowerCase().includes(q)||String(c.customerCode||'').toLowerCase().includes(q));
+  const mobilePeriod=monthKey(selectedYear,mobileSelectedMonth),mobilePaidIds=new Set((await paymentsForPeriod(mobilePeriod)).map(p=>p.customerId));
+  const mobileStateOf=c=>customerMonthState(c,selectedYear,mobileSelectedMonth,mobilePaidIds.has(c.id)?new Set([mobilePeriod]):new Set());
+  const statusFilter=$('customerStatusFilter')?.value||'all';
+  if(statusFilter!=='all'){
+    customers=customers.filter(c=>{const s=mobileStateOf(c);return statusFilter==='paid'?s==='paid':statusFilter==='arrears'?s==='arrears':s!=='paid'&&s!=='inactive'});
+  }
+  const sort=$('customerSort')?.value||'default';if(sort==='name')customers.sort((a,b)=>a.name.localeCompare(b.name,'id'));if(sort==='status'){const rank={arrears:0,issued:1,future:2,paid:3,inactive:4};customers.sort((a,b)=>rank[mobileStateOf(a)]-rank[mobileStateOf(b)]||a.name.localeCompare(b.name,'id'))}
   const size=Number($("pageSize").value),pages=Math.max(1,Math.ceil(customers.length/size));currentPage=Math.min(currentPage,pages);
-  const start=(currentPage-1)*size,page=customers.slice(start,start+size),body=$("customerRows");body.innerHTML="";
+  const start=(currentPage-1)*size,page=customers.slice(start,start+size),body=$("customerRows"),mobileList=$('mobileCustomerList');body.innerHTML="";mobileList.innerHTML="";$('mobileMonthLabel').textContent=`${MONTHS[mobileSelectedMonth]} ${selectedYear}`;
   for(let i=0;i<page.length;i++){
     const c=page[i],paidSet=new Set((await paymentsForCustomerYear(c.id,selectedYear)).map(p=>p.period)),row=document.createElement("tr");
     row.innerHTML=`<td>${start+i+1}</td><td><span class="customer-link" data-id="${c.id}">${c.name}</span><div class="row-meta">${c.customerCode} · ${c.speed} · ${money(c.monthlyPrice)}${c.whatsapp?` · WA ${c.whatsapp}`:""}</div></td>`;
     for(let m=0;m<12;m++){
       const td=document.createElement("td"),period=monthKey(selectedYear,m);let st;
-      const first=firstBillPeriod(c);
-      if(periodCompare(selectedYear,m,first.year,first.month)<0)st="inactive";
-      else if(paidSet.has(period))st="paid";
-      else{const today=new Date();today.setHours(0,0,0,0);const due=dueDate(c,selectedYear,m);due.setHours(0,0,0,0);st=today<due?"future":today.getTime()===due.getTime()?"issued":"arrears"}
+      st=customerMonthState(c,selectedYear,m,paidSet);
       const now=new Date(),next=new Date(now.getFullYear(),now.getMonth()+1,1),isPayablePeriod=(selectedYear===now.getFullYear()&&m===now.getMonth())||(selectedYear===next.getFullYear()&&m===next.getMonth());
       const b=document.createElement("button");b.className=`month-btn ${st}`;b.textContent=st==="future"&&isPayablePeriod?"Bayar lebih awal":statusLabel(st);b.dataset.cid=c.id;b.dataset.month=m;
       if(st==="inactive"||(st==="future"&&!isPayablePeriod))b.disabled=true;else b.addEventListener("click",()=>openPayment(c.id,m));td.appendChild(b);row.appendChild(td);
     }
     body.appendChild(row);
+    const mobileState=customerMonthState(c,selectedYear,mobileSelectedMonth,paidSet),pay=mobileState==='paid'?await paymentFor(c.id,monthKey(selectedYear,mobileSelectedMonth)):null,card=document.createElement('article');
+    const stateText=mobileState==='paid'?'Lunas':mobileState==='arrears'?'Menunggak':mobileState==='issued'?'Tagihan terbit':mobileState==='inactive'?'Belum aktif':'Belum bayar';
+    card.className='mobile-customer-card';card.innerHTML=`<span class="mobile-row-number">${start+i+1}</span><button class="mobile-customer-name" type="button"><b>${c.name}</b><small>${c.customerCode}</small></button><div class="mobile-package"><b>${c.speed}</b><small>${money(c.monthlyPrice)}</small></div><button class="mobile-month-status ${mobileState}" type="button"><b>${mobileState==='paid'?'✓ ':''}${stateText}</b><small>${pay?.date||MONTHS[mobileSelectedMonth]+' '+selectedYear}</small></button><button class="mobile-more" type="button">⋮</button>`;
+    card.querySelector('.mobile-customer-name').addEventListener('click',()=>openCustomerDetail(c.id));card.querySelector('.mobile-more').addEventListener('click',()=>openCustomerDetail(c.id));
+    const sb=card.querySelector('.mobile-month-status'),now=new Date(),next=new Date(now.getFullYear(),now.getMonth()+1,1),payable=(selectedYear===now.getFullYear()&&mobileSelectedMonth===now.getMonth())||(selectedYear===next.getFullYear()&&mobileSelectedMonth===next.getMonth());if(mobileState==='inactive'||(mobileState==='future'&&!payable))sb.disabled=true;else sb.addEventListener('click',()=>openPayment(c.id,mobileSelectedMonth));mobileList.appendChild(card);
   }
   body.querySelectorAll(".customer-link").forEach(e=>e.addEventListener("click",()=>openCustomerDetail(Number(e.dataset.id))));
   $("pageInfo").textContent=`Menampilkan ${customers.length?start+1:0}–${Math.min(start+size,customers.length)} dari ${customers.length} data`;
@@ -356,10 +372,10 @@ async function loadGoogleAccount(){
 }
 function initGoogle(){
   if(!window.google?.accounts?.oauth2){toast("Google belum siap, coba lagi beberapa detik");return false}
-  googleTokenClient=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:DRIVE_SCOPE,callback:r=>{if(r.error){if(r.error!=="interaction_required")alert("Login Google gagal: "+r.error);return}googleAccessToken=r.access_token;persistGoogleSession(r);updateDriveUI();loadGoogleAccount();toast("Google Drive terhubung dan sesi disimpan")}});return true;
+  googleTokenClient=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:DRIVE_SCOPE,error_callback:()=>{pendingAccountSwitch=false;toast("Pemilihan akun dibatalkan. Akun lama tetap terhubung.")},callback:r=>{if(r.error){pendingAccountSwitch=false;if(r.error!=="interaction_required"&&r.error!=="popup_closed")toast("Pemilihan akun dibatalkan. Akun lama tetap terhubung.");return}googleAccessToken=r.access_token;pendingAccountSwitch=false;persistGoogleSession(r);updateDriveUI();loadGoogleAccount();toast("Google Drive terhubung dan sesi disimpan")}});return true;
 }
 function connectDrive(){if(initGoogle())googleTokenClient.requestAccessToken({prompt:""})}
-function switchDriveAccount(){googleAccessToken=null;googleAccountLabel="";cloudSnapshot=null;localStorage.removeItem(GOOGLE_SESSION_KEY);updateDriveUI();if(initGoogle())googleTokenClient.requestAccessToken({prompt:"select_account"})}
+function switchDriveAccount(){if(pendingAccountSwitch)return;pendingAccountSwitch=true;toast("Pilih akun baru. Akun lama tetap aktif sampai pilihan berhasil.");if(initGoogle())googleTokenClient.requestAccessToken({prompt:"select_account"});else pendingAccountSwitch=false}
 function disconnectDrive(){googleAccessToken=null;googleAccountLabel="";cloudSnapshot=null;localStorage.removeItem(GOOGLE_SESSION_KEY);updateDriveUI();toast("Google Drive diputuskan dari perangkat ini")}
 function updateDriveUI(){const ok=!!googleAccessToken;$("driveBadge").classList.toggle("ok",ok);$("driveBadge").querySelector("span").textContent=ok?"Drive terhubung":"Drive belum terhubung";$("driveStatusText").textContent=ok?"Terhubung · Event Ledger V8 siap":"Belum terhubung";$("connectDriveBtn").classList.toggle("hidden",ok);$("disconnectDriveBtn").classList.toggle("hidden",!ok)}
 async function driveFetch(url,opts={}){if(!googleAccessToken)throw new Error("Hubungkan Google Drive dulu");const r=await fetch(url,{...opts,headers:{Authorization:"Bearer "+googleAccessToken,...(opts.headers||{})}});if(!r.ok){if(r.status===401){googleAccessToken=null;localStorage.removeItem(GOOGLE_SESSION_KEY);updateDriveUI()}throw new Error(await r.text())}return r}
@@ -746,7 +762,7 @@ async function deriveCurrentFilesForV8(st,events){
   }
   const recentPay=events.filter(e=>e.type==='payment.paid'||e.type==='payment.cancelled').sort(eventSort).slice(-500).map(e=>({...e,payload:{...e.payload}})),paymentGroups=buildPaymentGroups(events),maxAt=events.length?[...events].sort(eventSort).at(-1).at:null;
   const bot={schema:WA_STATUS_SCHEMA,app:'MAHDY-NET Billing V8.1',generatedAt:nowISO(),revision:state.revision||0,botEventsFileId:botFile.id,templateCapabilities:{version:1,mode:'adaptive-single-multiple',templates:['dynamic_bill_unpaid','dynamic_bill_paid'],variables:['nama','jumlah_invoice','rincian_invoice','total_tagihan','tanggal_terbit_terbaru','periode_pemakaian_terbaru','periode_tagihan_terbaru','tanggal_tagihan_berikutnya','tanda_tangan']},customers:botCustomers,packages:packages.filter(p=>p.active!==false).map(p=>({id:p.packageCode||p.syncKey,name:p.name||'',speed:p.speed||'',price:Number(p.price||0),active:true})),paymentEvents:recentPay,paymentGroups};
-  const manifest={schema:8,app:'MAHDY-NET Billing V8.1 Fast Event Ledger',revision:state.revision||0,modifiedAt:maxAt||state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length,events:events.length,billingEvents:events.filter(e=>e.deviceId!=='wa-bot').length,botEvents:events.filter(e=>e.deviceId==='wa-bot').length},eventModel:'append-only',syncEngine:'fast-incremental-v1',eventHash:eventSetHash(events),paymentYears:Object.keys(years).sort()};
+  const manifest={schema:8,app:'MAHDY-NET Billing V8.3 Fast Event Ledger',revision:state.revision||0,modifiedAt:maxAt||state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length,events:events.length,billingEvents:events.filter(e=>e.deviceId!=='wa-bot').length,botEvents:events.filter(e=>e.deviceId==='wa-bot').length},eventModel:'append-only',syncEngine:'fast-incremental-v2-no-change',eventHash:eventSetHash(events),paymentYears:Object.keys(years).sort()};
   const bundle={manifest,packages:{schema:8,items:packages},customers:{schema:8,items:customers},current:{schema:8,items:cur},summary:summaryFile,paymentYears:years,bot};
   const hashes={packages:contentHash(bundle.packages),customers:contentHash(bundle.customers),current:contentHash(bundle.current),summary:contentHash(bundle.summary),bot:contentHash(bundle.bot),paymentYears:{}};for(const [y,items] of Object.entries(years))hashes.paymentYears[y]=contentHash({schema:8,year:Number(y),items});bundle.manifest.fileHashes=hashes;return bundle;
 }
@@ -760,23 +776,29 @@ async function writeV8DerivedFast(st,bundle,oldManifest){
   await Promise.all(jobs);const manifestCoreChanged=!oldManifest||oldManifest.eventHash!==bundle.manifest.eventHash||JSON.stringify(oldManifest.fileHashes||{})!==JSON.stringify(bundle.manifest.fileHashes||{})||JSON.stringify(oldManifest.counts||{})!==JSON.stringify(bundle.manifest.counts||{});if(manifestCoreChanged){changed.push('manifest.json');await saveKnownJson('manifest.json',bundle.manifest,st.data.id,maps.data)}return{changed};
 }
 async function openSafeSync(){
-  if(!googleAccessToken){toast('Hubungkan Google Drive dulu');showView('dataView');return}const btn=$('safeSyncBtn'),label=btn.querySelector('.sync-button-label');btn.classList.add('busy');label.textContent='Memeriksa perubahan…';try{await ensureV8Migration();const [local,st]=await Promise.all([allLedgerEvents(),ensureDriveStructure()]),head=await getCloudHeaderV8(st),localSummary=summary(await exportData()),cc=head.manifest?.counts||{};$('localCustomerCount').textContent=`${localSummary.customers} pelanggan`;$('localPaymentCount').textContent=`${localSummary.payments} pembayaran · ${local.length} event`;$('localModified').textContent=(await getState()).modifiedAt?new Date((await getState()).modifiedAt).toLocaleString('id-ID'):'Belum ada perubahan';$('cloudCustomerCount').textContent=head.kind==='empty'?'Belum ada data':`${cc.customers??'?'} pelanggan`;$('cloudPaymentCount').textContent=head.kind==='empty'?'—':`${cc.payments??'?'} pembayaran · ${cc.billingEvents??'?'} event billing · ${cc.botEvents??'?'} event bot`;$('cloudModified').textContent=head.manifest?.modifiedAt?new Date(head.manifest.modifiedAt).toLocaleString('id-ID'):head.kind.toUpperCase();const w=$('syncWarning');w.className='sync-warning good';w.innerHTML=`<b>Fast Event Sync V8.2.</b> Tahap perbandingan hanya membaca header. File event yang tidak berubah langsung diambil dari cache perangkat; hanya perubahan baru yang diunduh.`;$('pullDriveBtn').classList.add('hidden');$('pushDriveBtn').classList.add('hidden');$('mergeDriveBtn')?.classList.remove('hidden');openModal('syncModal')}catch(e){alert('Gagal membandingkan event: '+e.message)}finally{btn.classList.remove('busy');label.textContent='Bandingkan & Sinkron'}
+  if(!googleAccessToken){toast('Hubungkan Google Drive dulu');showView('dataView');return}const btn=$('safeSyncBtn'),label=btn.querySelector('.sync-button-label');btn.classList.add('busy');label.textContent='Memeriksa perubahan…';try{await ensureV8Migration();const [local,st]=await Promise.all([allLedgerEvents(),ensureDriveStructure()]),head=await getCloudHeaderV8(st),localSummary=summary(await exportData()),cc=head.manifest?.counts||{};$('localCustomerCount').textContent=`${localSummary.customers} pelanggan`;$('localPaymentCount').textContent=`${localSummary.payments} pembayaran · ${local.length} event`;$('localModified').textContent=(await getState()).modifiedAt?new Date((await getState()).modifiedAt).toLocaleString('id-ID'):'Belum ada perubahan';$('cloudCustomerCount').textContent=head.kind==='empty'?'Belum ada data':`${cc.customers??'?'} pelanggan`;$('cloudPaymentCount').textContent=head.kind==='empty'?'—':`${cc.payments??'?'} pembayaran · ${cc.billingEvents??'?'} event billing · ${cc.botEvents??'?'} event bot`;$('cloudModified').textContent=head.manifest?.modifiedAt?new Date(head.manifest.modifiedAt).toLocaleString('id-ID'):head.kind.toUpperCase();const w=$('syncWarning');w.className='sync-warning good';w.innerHTML=`<b>Fast No-Change Mode V8.3.</b> Jika sidik data HP, Drive, dan bot sama, proses berhenti tanpa menghitung atau menulis ulang file. Jika ada perubahan, sinkron penuh berjalan otomatis.`;$('pullDriveBtn').classList.add('hidden');$('pushDriveBtn').classList.add('hidden');$('mergeDriveBtn')?.classList.remove('hidden');openModal('syncModal')}catch(e){alert('Gagal membandingkan event: '+e.message)}finally{btn.classList.remove('busy');label.textContent='Bandingkan & Sinkron'}
 }
 async function syncEventLedger({showResult=true}={}){
   if(!googleAccessToken)throw new Error('Hubungkan Google Drive dulu');if(driveWriteLock)throw new Error('Sinkronisasi masih berjalan');driveWriteLock=true;const started=performance.now();try{
     await ensureV8Migration();const local=await allLedgerEvents(),st=await ensureDriveStructure(),head=await getCloudHeaderV8(st),[remote,botLedger]=await Promise.all([readDriveBillingEventsFast(st),readBotLedgerFast(st)]);
     if(head.kind==='v8'){const expected=Number(head.manifest?.counts?.billingEvents??0),uniqueRemote=mergeEventSets(remote.events).length;if(expected>uniqueRemote)throw new Error(`Manifest V8 mencatat ${expected} event billing tetapi hanya ${uniqueRemote} event unik yang terbaca. Sinkron dihentikan tanpa menulis agar event tidak terlewat.`)}
+    const localHash=eventSetHash(local),remoteUnion=mergeEventSets(remote.events,botLedger.events),remoteHash=eventSetHash(remoteUnion),lastSync=await getOne('meta','lastV8Sync'),today=ymdLocal(),botSignature=driveFileSig(botLedger.file||{}),manifestHash=String(head.manifest?.eventHash||'');
+    const fastNoChange=head.kind==='v8'&&manifestHash&&localHash===manifestHash&&remoteHash===manifestHash&&remote.downloaded===0&&botLedger.cached===true&&String(lastSync?.syncDate||String(lastSync?.at||'').slice(0,10))===today;
+    if(fastNoChange){
+      const elapsed=Math.round(performance.now()-started),report={fastNoChange:true,mode:'no-change',syncDate:today,localHash,remoteSignature:remote.signature,botSignature,localBefore:{customers:(await all('customers')).length,payments:(await all('payments')).length,events:local.length},driveEvents:mergeEventSets(remote.events).length,botEvents:botLedger.events.length,legacyEvents:0,mergedEvents:local.length,customers:(await all('customers')).length,payments:(await all('payments')).length,eventFilesDownloaded:0,eventFilesFromCache:remote.cached+(botLedger.cached?1:0),deviceLogChanged:false,derivedFilesChanged:[],elapsedMs:elapsed};
+      await put('meta',{key:'lastV8Sync',at:nowISO(),syncDate:today,report,...report});if(showResult)toast(`Fast Check selesai · ${(elapsed/1000).toFixed(1)} dtk · tidak ada perubahan`);return report;
+    }
     let legacyEvents=[];if((head.kind==='v7'||head.kind==='legacy')&&remote.events.length===0){const data=head.kind==='legacy'?head.data:await readV7Bundle(head);legacyEvents=legacyEventsFromData(data,'drive_v7_migration').map(e=>({...e,deviceId:'migration-local'}))}
     let union=mergeEventSets(local,remote.events,botLedger.events,legacyEvents);materializeLedger(union);const localBefore={customers:(await all('customers')).length,payments:(await all('payments')).length,events:local.length};if((head.kind==='v7'||head.kind==='legacy')&&head.kind!=='empty')await createStructuredSafetyBackup(st,'MIGRASI_KE_V81');
     const dev=await upsertDeviceLogFast(st,union,remote);
     // Final metadata pass. Unchanged files reuse verified cache; only changed/new files are downloaded.
     const [finalRemote,finalBot]=await Promise.all([readDriveBillingEventsFast(st),readBotLedgerFast(st)]);union=mergeEventSets(union,finalRemote.events,finalBot.events);const mat=materializeLedger(union);await commitMaterialized(mat,union);const bundle=await deriveCurrentFilesForV8(st,union),write=await writeV8DerivedFast(st,bundle,head.manifest||null),elapsed=Math.round(performance.now()-started);
-    const report={localBefore,driveEvents:mergeEventSets(finalRemote.events).length,botEvents:finalBot.events.length,legacyEvents:legacyEvents.length,mergedEvents:union.length,customers:mat.customers.length,payments:mat.payments.length,eventFilesDownloaded:remote.downloaded+finalRemote.downloaded,eventFilesFromCache:remote.cached+finalRemote.cached,deviceLogChanged:dev.changed,derivedFilesChanged:write.changed,elapsedMs:elapsed};await put('meta',{key:'lastV8Sync',at:nowISO(),report});if(showResult)toast(`Fast Sync selesai · ${(elapsed/1000).toFixed(1)} dtk · ${union.length} event`);return report;
+    const report={fastNoChange:false,mode:'full',syncDate:ymdLocal(),localHash:eventSetHash(union),remoteSignature:finalRemote.signature,botSignature:driveFileSig(finalBot.file||{}),localBefore,driveEvents:mergeEventSets(finalRemote.events).length,botEvents:finalBot.events.length,legacyEvents:legacyEvents.length,mergedEvents:union.length,customers:mat.customers.length,payments:mat.payments.length,eventFilesDownloaded:remote.downloaded+finalRemote.downloaded,eventFilesFromCache:remote.cached+finalRemote.cached,deviceLogChanged:dev.changed,derivedFilesChanged:write.changed,elapsedMs:elapsed};await put('meta',{key:'lastV8Sync',at:nowISO(),syncDate:report.syncDate,report,...report});if(showResult)toast(`Fast Sync selesai · ${(elapsed/1000).toFixed(1)} dtk · ${union.length} event`);return report;
   }finally{driveWriteLock=false}
 }
-async function mergeDriveNow(){if(!confirm('Gabungkan event HP + Google Drive + WhatsApp Bot sekarang?\n\nFast Sync hanya mengunduh event yang berubah. Event Ledger tetap append-only dan log perangkat dibackup delta sebelum ditulis.'))return;try{const r=await syncEventLedger();closeModal('syncModal');await renderAll();alert(`Fast Event Sync selesai.\n\nWaktu: ${(r.elapsedMs/1000).toFixed(1)} detik\nEvent gabungan: ${r.mergedEvents}\nEvent file diunduh: ${r.eventFilesDownloaded}\nCache event dipakai: ${r.eventFilesFromCache}\nFile turunan berubah: ${r.derivedFilesChanged.length}\nPelanggan: ${r.customers}\nInvoice LUNAS: ${r.payments}`)}catch(e){alert('Sinkron V8.1 dihentikan: '+e.message)}}
+async function mergeDriveNow(){if(!confirm('Gabungkan event HP + Google Drive + WhatsApp Bot sekarang?\n\nFast Sync hanya mengunduh event yang berubah. Event Ledger tetap append-only dan log perangkat dibackup delta sebelum ditulis.'))return;try{const r=await syncEventLedger();closeModal('syncModal');await renderAll();if(r.fastNoChange){alert(`Fast Check selesai.\n\nWaktu: ${(r.elapsedMs/1000).toFixed(1)} detik\nTidak ada perubahan. Tidak ada file yang ditulis ulang.\nEvent: ${r.mergedEvents}\nPelanggan: ${r.customers}`);return}alert(`Fast Event Sync selesai.\n\nWaktu: ${(r.elapsedMs/1000).toFixed(1)} detik\nEvent gabungan: ${r.mergedEvents}\nEvent file diunduh: ${r.eventFilesDownloaded}\nCache event dipakai: ${r.eventFilesFromCache}\nFile turunan berubah: ${r.derivedFilesChanged.length}\nPelanggan: ${r.customers}\nInvoice LUNAS: ${r.payments}`)}catch(e){alert('Sinkron V8.3 dihentikan: '+e.message)}}
 async function exportData(){const state=await getState();return{schema:8,app:'MAHDY-NET Billing V8.1 Fast Event Ledger',revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all('packages'),customers:await all('customers'),payments:await all('payments'),events:await allLedgerEvents()}}
-function updateDriveUI(){const ok=!!googleAccessToken;$('driveBadge').classList.toggle('ok',ok);$('driveBadge').querySelector('span').textContent=ok?'Drive terhubung':'Drive belum terhubung';$('driveStatusText').textContent=ok?'Terhubung · Fast Event Sync siap':'Belum terhubung';$('driveAccountText').textContent=ok?(googleAccountLabel||'Sesi Google tersimpan di perangkat ini'):'Akun Google belum dipilih';$('connectDriveBtn').classList.toggle('hidden',ok);$('driveAccountActions').classList.toggle('hidden',!ok)}
+function updateDriveUI(){const ok=!!googleAccessToken;$('driveBadge').classList.toggle('ok',ok);$('driveBadge').querySelector('span').textContent=ok?'Drive terhubung':'Drive belum terhubung';$('driveStatusText').textContent=ok?'Terhubung · Fast Event Sync siap':'Belum terhubung';$('driveAccountText').textContent=ok?(googleAccountLabel||'Sesi Google tersimpan di perangkat ini'):'Akun Google belum dipilih';$('topDriveText').textContent=ok?'● Terhubung':'Belum terhubung';$('topDrivePill').classList.toggle('connected',ok);$('connectDriveBtn').classList.toggle('hidden',ok);$('driveAccountActions').classList.toggle('hidden',!ok)}
 
 $('multiPaymentOpenBtn')?.addEventListener('click',openMultiPayment);
 $('saveMultiPaymentBtn')?.addEventListener('click',saveMultiPayment);
@@ -804,6 +826,11 @@ $("deletePaymentBtn").addEventListener("click",deletePayment);
 $("editCustomerBtn").addEventListener("click",()=>{const id=detailCustomerId;closeModal("customerDetailModal");if(id!=null)openCustomerForm(id)});
 $("fStartDate").addEventListener("change",()=>{if(!$("fStartDate").value)return;const d=new Date($("fStartDate").value+"T00:00:00");d.setMonth(d.getMonth()+1);$("fFirstBillDate").value=ymdLocal(d)});
 $("customerSearch").addEventListener("input",()=>{currentPage=1;renderCustomerTable()});
+$("customerStatusFilter").addEventListener("change",()=>{currentPage=1;renderCustomerTable()});
+$("customerSort").addEventListener("change",()=>{currentPage=1;renderCustomerTable()});
+$("customerTotalPill").addEventListener("click",()=>$("customerSearch").focus());
+$("mobilePrevMonth").addEventListener("click",()=>{mobileSelectedMonth--;if(mobileSelectedMonth<0){mobileSelectedMonth=11;selectedYear--;$('yearSelect').value=selectedYear}currentPage=1;renderCustomerTable()});
+$("mobileNextMonth").addEventListener("click",()=>{mobileSelectedMonth++;if(mobileSelectedMonth>11){mobileSelectedMonth=0;selectedYear++;$('yearSelect').value=selectedYear}currentPage=1;renderCustomerTable()});
 $("paymentSearch").addEventListener("input",renderPayments);
 $("paymentYearSelect")?.addEventListener("change",renderPayments);
 $("yearSelect").addEventListener("change",()=>{selectedYear=Number($("yearSelect").value);renderCustomerTable()});
@@ -811,6 +838,7 @@ $("pageSize").addEventListener("change",()=>{currentPage=1;renderCustomerTable()
 $("connectDriveBtn").addEventListener("click",connectDrive);
 $("disconnectDriveBtn").addEventListener("click",disconnectDrive);
 $("switchDriveBtn").addEventListener("click",switchDriveAccount);
+$("topDrivePill").addEventListener("click",()=>showView("dataView"));
 $("safeSyncBtn").addEventListener("click",openSafeSync);
 $("pullDriveBtn").addEventListener("click",pullFromDrive);
 $("pushDriveBtn").addEventListener("click",pushToDrive);

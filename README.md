@@ -1,4 +1,4 @@
-# MAHDY-NET Billing V8.2 — Smooth Mobile + Persistent Google Session
+# MAHDY-NET Billing V8.3 — Ultra Fast No-Change Sync
 
 V8.2 adalah patch tampilan dan pengalaman penggunaan di atas mesin Event Ledger V8.1. Schema data tetap **8**, sehingga data pelanggan, paket, pembayaran, cache, `wa-status.json`, dan `bot-events.json` lama tetap kompatibel.
 
@@ -11,6 +11,26 @@ V8.2 adalah patch tampilan dan pengalaman penggunaan di atas mesin Event Ledger 
 - Tampilan mobile daftar pelanggan/transaksi, tombol, pager, dan kartu dibuat lebih rapi.
 - Modal memakai animasi buka yang lebih lembut; tombol sinkron menampilkan status proses.
 - Manifest Drive memakai cache metadata agar tahap perbandingan dan sinkron berulang lebih cepat.
+
+## Tambalan V8.2.1
+
+- Halaman Pelanggan mobile dirombak mengikuti desain acuan: header ringkas, status Drive, total pelanggan, pencarian, filter, urutan, pemilih satu bulan, dan daftar pelanggan berbentuk kartu.
+- Tabel 12 bulan tetap tersedia untuk desktop, tetapi tidak lagi dipaksakan tampil pada HP.
+- Navigasi bawah tidak lagi menutupi daftar pelanggan.
+- Pergantian akun Google kini transaksional: akun lama baru diganti setelah akun baru berhasil dipilih. Membatalkan pemilih akun tidak memutus koneksi lama.
+
+## Tambalan V8.2.2
+
+- Menambahkan penanda versi pada pemanggilan `styles.css` dan `app.js` agar Chrome/GitHub Pages tidak memakai visual lama dari cache.
+- Menambahkan aturan no-cache pada halaman utama.
+- Setelah diekstrak, unggah **isi paket** (`index.html`, `app.js`, `styles.css`, folder `assets`) untuk menggantikan file lama di root repository. Jangan mengunggah ZIP saja karena GitHub Pages tidak mengekstraknya.
+
+## Optimasi V8.3
+
+- Fast No-Change Mode membandingkan hash event lokal, hash manifest, gabungan event Drive, metadata file, dan cache bot.
+- Jika seluruh sumber sama dan sinkron penuh sudah dilakukan pada hari yang sama, proses selesai tanpa materialisasi, backup delta, atau penulisan file turunan.
+- Bila tanggal berubah atau ditemukan perbedaan sekecil apa pun, sinkron penuh tetap berjalan agar status jatuh tempo dan data bot diperbarui dengan aman.
+- Laporan hasil membedakan `no-change` dan `full`, sekaligus tetap menampilkan waktu proses.
 
 ## Mesin data V8.1 yang tetap dipertahankan
 

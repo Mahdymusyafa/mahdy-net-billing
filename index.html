@@ -3,9 +3,12 @@
 <head>
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta http-equiv="Cache-Control" content="no-cache, no-store, must-revalidate">
+  <meta http-equiv="Pragma" content="no-cache">
+  <meta http-equiv="Expires" content="0">
   <meta name="theme-color" content="#f5f8fc">
-  <title>MAHDY-NET Billing V8.2 Smooth Sync</title>
-  <link rel="stylesheet" href="styles.css">
+  <title>MAHDY-NET Billing V8.3 Ultra Fast Sync</title>
+  <link rel="stylesheet" href="styles.css?v=8.3-ultra-fast">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
 <body>
@@ -14,10 +17,11 @@
     <div class="brand">
       <div class="logo-frame"><img src="assets/logo-mahdy-net.png" alt="MAHDY-NET"></div>
       <div class="brand-copy">
-        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.2</small></h1>
+        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.3</small></h1>
         <span id="localSaveStatus">Auto-save aktif</span>
       </div>
     </div>
+    <button class="top-drive-pill" id="topDrivePill" type="button"><span class="drive-triangle">▲</span><span><b>Google Drive</b><small id="topDriveText">Belum terhubung</small></span><i>›</i></button>
     <button class="icon-btn primary" id="quickAddCustomer" title="Tambah pelanggan">＋</button>
   </header>
 
@@ -73,16 +77,22 @@
     </section>
 
     <section class="view" id="customersView">
-      <div class="page-title">
-        <div><span class="eyebrow">PELANGGAN</span><h2>Daftar pelanggan</h2></div>
-        <button class="btn primary" id="addCustomerOpen">＋ Tambah</button>
+      <div class="customer-page-hero">
+        <div class="customer-hero-icon">♟</div>
+        <div class="customer-hero-copy"><h2>Pelanggan</h2><p>Kelola data pelanggan internet Anda</p></div>
+        <button class="customer-total-pill" id="customerTotalPill"><span>♙</span><small>Total Pelanggan</small><b id="customerTotalCount">0</b><i>›</i></button>
+        <button class="btn primary desktop-add" id="addCustomerOpen">＋ Tambah</button>
       </div>
 
       <div class="filter-card">
         <label class="searchbox">
           <span>⌕</span>
-          <input id="customerSearch" placeholder="Cari nama pelanggan...">
+          <input id="customerSearch" placeholder="Cari nama atau ID pelanggan...">
         </label>
+        <div class="mobile-filter-actions">
+          <label class="filter-select"><span>▽</span><select id="customerStatusFilter"><option value="all">Filter</option><option value="paid">Lunas</option><option value="unpaid">Belum bayar</option><option value="arrears">Menunggak</option></select></label>
+          <label class="filter-select"><span>⇅</span><select id="customerSort"><option value="default">Urutkan</option><option value="name">Nama A–Z</option><option value="status">Status</option></select></label>
+        </div>
         <div class="filter-row">
           <label><span>Tahun</span><select id="yearSelect"></select></label>
           <label><span>Tampilkan</span>
@@ -96,6 +106,12 @@
       <div class="customer-focus" id="customerFocus"></div>
 
       <div class="table-card">
+        <div class="mobile-month-toolbar">
+          <button id="mobilePrevMonth" type="button">‹</button>
+          <strong id="mobileMonthLabel">—</strong>
+          <button id="mobileNextMonth" type="button">›</button>
+          <span class="mobile-legend paid">● Lunas</span><span class="mobile-legend unpaid">● Belum</span>
+        </div>
         <div class="month-scroller-note">← Geser tabel untuk melihat bulan lainnya →</div>
         <div class="table-wrap">
           <table>
@@ -103,6 +119,7 @@
             <tbody id="customerRows"></tbody>
           </table>
         </div>
+        <div class="mobile-customer-list" id="mobileCustomerList"></div>
         <div class="pager">
           <span id="pageInfo">0 data</span>
           <div id="pageButtons"></div>
@@ -174,7 +191,7 @@
 
       <div class="safety-note">
         <strong>Pengaman aktif</strong>
-        <p>V8.2 tetap memakai Event Ledger schema 8. Sinkron normal memakai cache perangkat dan hanya membaca file event yang berubah. Backup manual tetap membuat snapshot penuh.</p>
+        <p>V8.3 memakai Fast No-Change Mode. Jika sidik data HP, Drive, dan bot sama, sinkron selesai tanpa menulis ulang file. Event Ledger tetap memakai schema 8.</p>
       </div>
     </section>
   </main>
@@ -291,6 +308,6 @@
 </div>
 
 <div class="toast" id="toast"></div>
-<script src="app.js"></script>
+<script src="app.js?v=8.3-ultra-fast"></script>
 </body>
 </html>
