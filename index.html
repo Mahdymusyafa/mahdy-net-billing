@@ -4,7 +4,7 @@
   <meta charset="utf-8">
   <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
   <meta name="theme-color" content="#f5f8fc">
-  <title>MAHDY-NET Billing V8.1 Fast Event Ledger</title>
+  <title>MAHDY-NET Billing V8.2 Smooth Sync</title>
   <link rel="stylesheet" href="styles.css">
   <script src="https://accounts.google.com/gsi/client" async defer></script>
 </head>
@@ -14,7 +14,7 @@
     <div class="brand">
       <div class="logo-frame"><img src="assets/logo-mahdy-net.png" alt="MAHDY-NET"></div>
       <div class="brand-copy">
-        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.1</small></h1>
+        <h1>Billing Manager <small style="font-size:.55em;opacity:.55">V8.2</small></h1>
         <span id="localSaveStatus">Auto-save aktif</span>
       </div>
     </div>
@@ -145,10 +145,14 @@
           <div>
             <strong>Google Drive & Backup</strong>
             <p id="driveStatusText">Belum terhubung</p>
+            <small class="drive-account" id="driveAccountText">Akun Google belum dipilih</small>
           </div>
         </div>
         <button class="btn primary full" id="connectDriveBtn">Hubungkan Google Drive & Backup</button>
-        <button class="btn subtle full hidden" id="disconnectDriveBtn">Putuskan koneksi</button>
+        <div class="drive-account-actions hidden" id="driveAccountActions">
+          <button class="btn subtle" id="switchDriveBtn">Ganti akun Google</button>
+          <button class="btn ghost-danger" id="disconnectDriveBtn">Putuskan</button>
+        </div>
       </div>
 
       <div class="safe-sync-card">
@@ -157,7 +161,7 @@
           <strong>Sinkron Aman</strong>
           <p>Fast Event Sync: cek perubahan metadata lebih dulu, ambil hanya event yang berubah, lalu gabungkan dengan aman.</p>
         </div>
-        <button class="btn primary" id="safeSyncBtn">Bandingkan & Sinkron</button>
+        <button class="btn primary sync-button" id="safeSyncBtn"><span class="sync-button-label">Bandingkan & Sinkron</span><i class="button-spinner"></i></button>
       </div>
 
       <div class="data-actions">
@@ -170,7 +174,7 @@
 
       <div class="safety-note">
         <strong>Pengaman aktif</strong>
-        <p>V8.1 tetap memakai Event Ledger append-only. Sinkron normal hanya membaca file event yang berubah dan membuat backup delta sebelum log perangkat ditulis. Backup manual tetap membuat snapshot penuh.</p>
+        <p>V8.2 tetap memakai Event Ledger schema 8. Sinkron normal memakai cache perangkat dan hanya membaca file event yang berubah. Backup manual tetap membuat snapshot penuh.</p>
       </div>
     </section>
   </main>

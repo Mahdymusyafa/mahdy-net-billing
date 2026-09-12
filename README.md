@@ -1,4 +1,18 @@
-# MAHDY-NET Billing V8.1 — Fast Sync + Dynamic Multi-Invoice
+# MAHDY-NET Billing V8.2 — Smooth Mobile + Persistent Google Session
+
+V8.2 adalah patch tampilan dan pengalaman penggunaan di atas mesin Event Ledger V8.1. Schema data tetap **8**, sehingga data pelanggan, paket, pembayaran, cache, `wa-status.json`, dan `bot-events.json` lama tetap kompatibel.
+
+## Perubahan V8.2
+
+- Sesi Google disimpan di perangkat dan dipulihkan otomatis selama token masih berlaku.
+- Saat sesi Google perlu diperbarui, aplikasi mencoba menyambungkan kembali akun yang sama tanpa memaksa memilih akun berulang kali.
+- Tombol **Ganti akun Google** dipisahkan dari tombol **Putuskan**.
+- Nama akun aktif ditampilkan pada kartu Google Drive.
+- Tampilan mobile daftar pelanggan/transaksi, tombol, pager, dan kartu dibuat lebih rapi.
+- Modal memakai animasi buka yang lebih lembut; tombol sinkron menampilkan status proses.
+- Manifest Drive memakai cache metadata agar tahap perbandingan dan sinkron berulang lebih cepat.
+
+## Mesin data V8.1 yang tetap dipertahankan
 
 Versi ini adalah upgrade langsung dari Billing V8.0 Event Ledger. **Schema Event Ledger tetap 8** sehingga data V8.0 tidak perlu dihapus atau dimigrasi ulang.
 

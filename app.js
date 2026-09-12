@@ -14,6 +14,8 @@ const BACKUP_PREFIX="MAHDY-NET_Backup_";
 const SNAPSHOT_PREFIX="SNAPSHOT_";
 let db,currentPage=1,selectedYear=new Date().getFullYear(),editingCustomerId=null,detailCustomerId=null,editingPackageId=null,paymentCtx=null;
 let googleTokenClient=null,googleAccessToken=null,cloudSnapshot=null;
+const GOOGLE_SESSION_KEY="mahdy_google_session_v1";
+let googleAccountLabel="";
 
 const $=id=>document.getElementById(id);
 function money(n){return new Intl.NumberFormat("id-ID",{style:"currency",currency:"IDR",maximumFractionDigits:0}).format(Number(n||0))}
@@ -333,14 +335,34 @@ async function buildBundle(){
   return{manifest,packages:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:packages},customers:{schema:2,revision:manifest.revision,modifiedAt:manifest.modifiedAt,items:customers},current:{schema:1,generatedAt:nowISO(),items:await all("current")},summary:summaryFile,paymentYears:years,bot};
 }
 
+function savedGoogleSession(){try{return JSON.parse(localStorage.getItem(GOOGLE_SESSION_KEY)||"null")}catch{return null}}
+function persistGoogleSession(r){
+  const expiresAt=Date.now()+Math.max(60,Number(r.expires_in||3600))*1000-60000;
+  localStorage.setItem(GOOGLE_SESSION_KEY,JSON.stringify({accessToken:r.access_token,expiresAt,accountLabel:googleAccountLabel||""}));
+}
+function restoreGoogleSession(){
+  const s=savedGoogleSession();
+  if(!s?.accessToken||Number(s.expiresAt||0)<=Date.now()){googleAccountLabel=s?.accountLabel||"";return false}
+  googleAccessToken=s.accessToken;googleAccountLabel=s.accountLabel||"";return true;
+}
+function autoReconnectGoogle(attempt=0){
+  if(googleAccessToken||!savedGoogleSession())return;
+  if(!window.google?.accounts?.oauth2){if(attempt<20)setTimeout(()=>autoReconnectGoogle(attempt+1),250);return}
+  if(initGoogle())googleTokenClient.requestAccessToken({prompt:""});
+}
+async function loadGoogleAccount(){
+  if(!googleAccessToken)return;
+  try{const r=await driveFetch("https://www.googleapis.com/drive/v3/about?fields=user(displayName,emailAddress)");const u=(await r.json()).user||{};googleAccountLabel=u.emailAddress||u.displayName||"Akun Google aktif";const s=savedGoogleSession();if(s){s.accountLabel=googleAccountLabel;localStorage.setItem(GOOGLE_SESSION_KEY,JSON.stringify(s))}updateDriveUI()}catch{}
+}
 function initGoogle(){
   if(!window.google?.accounts?.oauth2){toast("Google belum siap, coba lagi beberapa detik");return false}
-  googleTokenClient=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:DRIVE_SCOPE,callback:r=>{if(r.error){alert("Login Google gagal: "+r.error);return}googleAccessToken=r.access_token;updateDriveUI();toast("Google Drive terhubung")}});return true;
+  googleTokenClient=google.accounts.oauth2.initTokenClient({client_id:CLIENT_ID,scope:DRIVE_SCOPE,callback:r=>{if(r.error){if(r.error!=="interaction_required")alert("Login Google gagal: "+r.error);return}googleAccessToken=r.access_token;persistGoogleSession(r);updateDriveUI();loadGoogleAccount();toast("Google Drive terhubung dan sesi disimpan")}});return true;
 }
 function connectDrive(){if(initGoogle())googleTokenClient.requestAccessToken({prompt:""})}
-function disconnectDrive(){googleAccessToken=null;cloudSnapshot=null;updateDriveUI()}
+function switchDriveAccount(){googleAccessToken=null;googleAccountLabel="";cloudSnapshot=null;localStorage.removeItem(GOOGLE_SESSION_KEY);updateDriveUI();if(initGoogle())googleTokenClient.requestAccessToken({prompt:"select_account"})}
+function disconnectDrive(){googleAccessToken=null;googleAccountLabel="";cloudSnapshot=null;localStorage.removeItem(GOOGLE_SESSION_KEY);updateDriveUI();toast("Google Drive diputuskan dari perangkat ini")}
 function updateDriveUI(){const ok=!!googleAccessToken;$("driveBadge").classList.toggle("ok",ok);$("driveBadge").querySelector("span").textContent=ok?"Drive terhubung":"Drive belum terhubung";$("driveStatusText").textContent=ok?"Terhubung · Event Ledger V8 siap":"Belum terhubung";$("connectDriveBtn").classList.toggle("hidden",ok);$("disconnectDriveBtn").classList.toggle("hidden",!ok)}
-async function driveFetch(url,opts={}){if(!googleAccessToken)throw new Error("Hubungkan Google Drive dulu");const r=await fetch(url,{...opts,headers:{Authorization:"Bearer "+googleAccessToken,...(opts.headers||{})}});if(!r.ok){if(r.status===401){googleAccessToken=null;updateDriveUI()}throw new Error(await r.text())}return r}
+async function driveFetch(url,opts={}){if(!googleAccessToken)throw new Error("Hubungkan Google Drive dulu");const r=await fetch(url,{...opts,headers:{Authorization:"Bearer "+googleAccessToken,...(opts.headers||{})}});if(!r.ok){if(r.status===401){googleAccessToken=null;localStorage.removeItem(GOOGLE_SESSION_KEY);updateDriveUI()}throw new Error(await r.text())}return r}
 function qEscape(v){return String(v).replace(/\\/g,"\\\\").replace(/'/g,"\\'")}
 async function driveList(query,fields="files(id,name,mimeType,parents,modifiedTime,size)",pageSize=100){const r=await driveFetch(`https://www.googleapis.com/drive/v3/files?q=${encodeURIComponent(query)}&orderBy=modifiedTime desc&fields=${encodeURIComponent(fields)}&pageSize=${pageSize}`);return (await r.json()).files||[]}
 async function findFolder(name,parentId=null){let q=`name='${qEscape(name)}' and mimeType='application/vnd.google-apps.folder' and trashed=false`;if(parentId)q+=` and '${qEscape(parentId)}' in parents`;return (await driveList(q))[0]||null}
@@ -689,6 +711,11 @@ function remoteCacheKey(id){return `driveRemote:${id}`}
 function driveFileSig(f){return `${f.id}|${f.modifiedTime||''}`}
 async function remoteCacheGet(id){return await getOne('meta',remoteCacheKey(id))}
 async function remoteCachePut(f,events){await put('meta',{key:remoteCacheKey(f.id),sig:driveFileSig(f),name:f.name,events,at:nowISO()})}
+async function readDriveJsonFast(f,cacheName){
+  const key=`driveJson:${cacheName}:${f.id}`,c=await getOne('meta',key),sig=driveFileSig(f);
+  if(c?.sig===sig&&c.data)return c.data;
+  const data=await downloadDrive(f.id);await put('meta',{key,sig,data,at:nowISO()});return data;
+}
 async function readDriveBillingEventsFast(st){
   const files=(await listDriveAll(`'${qEscape(st.eventsBilling.id)}' in parents and trashed=false`)).filter(f=>f.mimeType!=='application/vnd.google-apps.folder'),results=await Promise.all(files.map(async f=>{const c=await remoteCacheGet(f.id);if(c?.sig===driveFileSig(f)&&Array.isArray(c.events))return{f,events:c.events,cached:true};const d=await downloadDrive(f.id),ev=Array.isArray(d?.events)?d.events:(d?.eventId?[d]:null);if(!ev)throw new Error(`${f.name}: format event tidak valid`);await remoteCachePut(f,ev);return{f,events:ev,cached:false}}));
   return{files,events:results.flatMap(x=>x.events),perFile:new Map(results.map(x=>[x.f.id,x.events])),downloaded:results.filter(x=>!x.cached).length,cached:results.filter(x=>x.cached).length,signature:results.map(x=>driveFileSig(x.f)).sort().join('||')};
@@ -700,7 +727,7 @@ async function ensureBotEventsFile(st){
 async function readBotLedgerFast(st){
   let f=await ensureBotEventsFile(st);if(!f.modifiedTime)f=await driveMeta(f.id);const c=await remoteCacheGet(f.id);if(c?.sig===driveFileSig(f)&&Array.isArray(c.events))return{file:f,events:c.events,cached:true};const d=await downloadDrive(f.id);if(!d||!Array.isArray(d.events))throw new Error('bot-events.json tidak valid/tidak dapat dibaca. Sinkron dihentikan agar event bot tidak terlewat.');await remoteCachePut(f,d.events);return{file:f,events:d.events,cached:false};
 }
-async function getCloudHeaderV8(st=null){st=st||await ensureDriveStructure();const mf=await findJson('manifest.json',st.data.id);if(mf){const manifest=await downloadDrive(mf.id);return{kind:Number(manifest?.schema)>=8?'v8':'v7',root:st.root,data:st.data,manifest,file:mf}}const legacy=await findLegacyMain();if(legacy){const data=await downloadDrive(legacy.id);return{kind:'legacy',file:legacy,data,manifest:{schema:1,revision:data.revision||0,modifiedAt:data.modifiedAt||null,counts:summary(data)}}}return{kind:'empty',manifest:null}}
+async function getCloudHeaderV8(st=null){st=st||await ensureDriveStructure();const mf=await findJson('manifest.json',st.data.id);if(mf){const manifest=await readDriveJsonFast(mf,'manifest');return{kind:Number(manifest?.schema)>=8?'v8':'v7',root:st.root,data:st.data,manifest,file:mf}}const legacy=await findLegacyMain();if(legacy){const data=await readDriveJsonFast(legacy,'legacy-main');return{kind:'legacy',file:legacy,data,manifest:{schema:1,revision:data.revision||0,modifiedAt:data.modifiedAt||null,counts:summary(data)}}}return{kind:'empty',manifest:null}}
 function deviceEventsForLog(events,deviceId){return(events||[]).filter(e=>e.deviceId===deviceId||e.deviceId==='migration-local'||e.source==='local_v7_migration')}
 async function createDeltaDeviceBackup(st,file){if(!file?.id)return null;const stamp=new Date().toISOString().replace(/[:.]/g,'-'),name=`DELTA_${file.name||'device-events'}_${stamp}.json`;return await copyFile(file.id,name,st.backups.id)}
 async function upsertDeviceLogFast(st,events,remote){
@@ -733,7 +760,7 @@ async function writeV8DerivedFast(st,bundle,oldManifest){
   await Promise.all(jobs);const manifestCoreChanged=!oldManifest||oldManifest.eventHash!==bundle.manifest.eventHash||JSON.stringify(oldManifest.fileHashes||{})!==JSON.stringify(bundle.manifest.fileHashes||{})||JSON.stringify(oldManifest.counts||{})!==JSON.stringify(bundle.manifest.counts||{});if(manifestCoreChanged){changed.push('manifest.json');await saveKnownJson('manifest.json',bundle.manifest,st.data.id,maps.data)}return{changed};
 }
 async function openSafeSync(){
-  if(!googleAccessToken){toast('Hubungkan Google Drive dulu');showView('dataView');return}try{await ensureV8Migration();const [local,st]=await Promise.all([allLedgerEvents(),ensureDriveStructure()]),head=await getCloudHeaderV8(st),localSummary=summary(await exportData()),cc=head.manifest?.counts||{};$('localCustomerCount').textContent=`${localSummary.customers} pelanggan`;$('localPaymentCount').textContent=`${localSummary.payments} pembayaran · ${local.length} event`;$('localModified').textContent=(await getState()).modifiedAt?new Date((await getState()).modifiedAt).toLocaleString('id-ID'):'Belum ada perubahan';$('cloudCustomerCount').textContent=head.kind==='empty'?'Belum ada data':`${cc.customers??'?'} pelanggan`;$('cloudPaymentCount').textContent=head.kind==='empty'?'—':`${cc.payments??'?'} pembayaran · ${cc.billingEvents??'?'} event billing · ${cc.botEvents??'?'} event bot`;$('cloudModified').textContent=head.manifest?.modifiedAt?new Date(head.manifest.modifiedAt).toLocaleString('id-ID'):head.kind.toUpperCase();const w=$('syncWarning');w.className='sync-warning good';w.innerHTML=`<b>Fast Event Sync V8.1.</b> Tahap perbandingan ini hanya membaca header/manifest. Saat digabung, file event yang metadata-nya tidak berubah diambil dari cache lokal; hanya file berubah yang diunduh ulang. Source of truth tetap event append-only.`;$('pullDriveBtn').classList.add('hidden');$('pushDriveBtn').classList.add('hidden');$('mergeDriveBtn')?.classList.remove('hidden');openModal('syncModal')}catch(e){alert('Gagal membandingkan event: '+e.message)}
+  if(!googleAccessToken){toast('Hubungkan Google Drive dulu');showView('dataView');return}const btn=$('safeSyncBtn'),label=btn.querySelector('.sync-button-label');btn.classList.add('busy');label.textContent='Memeriksa perubahan…';try{await ensureV8Migration();const [local,st]=await Promise.all([allLedgerEvents(),ensureDriveStructure()]),head=await getCloudHeaderV8(st),localSummary=summary(await exportData()),cc=head.manifest?.counts||{};$('localCustomerCount').textContent=`${localSummary.customers} pelanggan`;$('localPaymentCount').textContent=`${localSummary.payments} pembayaran · ${local.length} event`;$('localModified').textContent=(await getState()).modifiedAt?new Date((await getState()).modifiedAt).toLocaleString('id-ID'):'Belum ada perubahan';$('cloudCustomerCount').textContent=head.kind==='empty'?'Belum ada data':`${cc.customers??'?'} pelanggan`;$('cloudPaymentCount').textContent=head.kind==='empty'?'—':`${cc.payments??'?'} pembayaran · ${cc.billingEvents??'?'} event billing · ${cc.botEvents??'?'} event bot`;$('cloudModified').textContent=head.manifest?.modifiedAt?new Date(head.manifest.modifiedAt).toLocaleString('id-ID'):head.kind.toUpperCase();const w=$('syncWarning');w.className='sync-warning good';w.innerHTML=`<b>Fast Event Sync V8.2.</b> Tahap perbandingan hanya membaca header. File event yang tidak berubah langsung diambil dari cache perangkat; hanya perubahan baru yang diunduh.`;$('pullDriveBtn').classList.add('hidden');$('pushDriveBtn').classList.add('hidden');$('mergeDriveBtn')?.classList.remove('hidden');openModal('syncModal')}catch(e){alert('Gagal membandingkan event: '+e.message)}finally{btn.classList.remove('busy');label.textContent='Bandingkan & Sinkron'}
 }
 async function syncEventLedger({showResult=true}={}){
   if(!googleAccessToken)throw new Error('Hubungkan Google Drive dulu');if(driveWriteLock)throw new Error('Sinkronisasi masih berjalan');driveWriteLock=true;const started=performance.now();try{
@@ -749,7 +776,7 @@ async function syncEventLedger({showResult=true}={}){
 }
 async function mergeDriveNow(){if(!confirm('Gabungkan event HP + Google Drive + WhatsApp Bot sekarang?\n\nFast Sync hanya mengunduh event yang berubah. Event Ledger tetap append-only dan log perangkat dibackup delta sebelum ditulis.'))return;try{const r=await syncEventLedger();closeModal('syncModal');await renderAll();alert(`Fast Event Sync selesai.\n\nWaktu: ${(r.elapsedMs/1000).toFixed(1)} detik\nEvent gabungan: ${r.mergedEvents}\nEvent file diunduh: ${r.eventFilesDownloaded}\nCache event dipakai: ${r.eventFilesFromCache}\nFile turunan berubah: ${r.derivedFilesChanged.length}\nPelanggan: ${r.customers}\nInvoice LUNAS: ${r.payments}`)}catch(e){alert('Sinkron V8.1 dihentikan: '+e.message)}}
 async function exportData(){const state=await getState();return{schema:8,app:'MAHDY-NET Billing V8.1 Fast Event Ledger',revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all('packages'),customers:await all('customers'),payments:await all('payments'),events:await allLedgerEvents()}}
-function updateDriveUI(){const ok=!!googleAccessToken;$('driveBadge').classList.toggle('ok',ok);$('driveBadge').querySelector('span').textContent=ok?'Drive terhubung':'Drive belum terhubung';$('driveStatusText').textContent=ok?'Terhubung · Fast Event Sync V8.1 siap':'Belum terhubung';$('connectDriveBtn').classList.toggle('hidden',ok);$('disconnectDriveBtn').classList.toggle('hidden',!ok)}
+function updateDriveUI(){const ok=!!googleAccessToken;$('driveBadge').classList.toggle('ok',ok);$('driveBadge').querySelector('span').textContent=ok?'Drive terhubung':'Drive belum terhubung';$('driveStatusText').textContent=ok?'Terhubung · Fast Event Sync siap':'Belum terhubung';$('driveAccountText').textContent=ok?(googleAccountLabel||'Sesi Google tersimpan di perangkat ini'):'Akun Google belum dipilih';$('connectDriveBtn').classList.toggle('hidden',ok);$('driveAccountActions').classList.toggle('hidden',!ok)}
 
 $('multiPaymentOpenBtn')?.addEventListener('click',openMultiPayment);
 $('saveMultiPaymentBtn')?.addEventListener('click',saveMultiPayment);
@@ -783,6 +810,7 @@ $("yearSelect").addEventListener("change",()=>{selectedYear=Number($("yearSelect
 $("pageSize").addEventListener("change",()=>{currentPage=1;renderCustomerTable()});
 $("connectDriveBtn").addEventListener("click",connectDrive);
 $("disconnectDriveBtn").addEventListener("click",disconnectDrive);
+$("switchDriveBtn").addEventListener("click",switchDriveAccount);
 $("safeSyncBtn").addEventListener("click",openSafeSync);
 $("pullDriveBtn").addEventListener("click",pullFromDrive);
 $("pushDriveBtn").addEventListener("click",pushToDrive);
@@ -795,7 +823,7 @@ $("importFile").addEventListener("change",async e=>{if(e.target.files[0]){try{aw
 (async()=>{
   await openDB();await ensureCustomerCodes();await ensureV8Migration();initYears();initDefaultDates();await fillPackageSelect("fCustomerPackage");
   const py=$("paymentYearSelect");if(py){const y=new Date().getFullYear();for(let i=y-10;i<=y+1;i++){const o=document.createElement("option");o.value=i;o.textContent=i;if(i===y)o.selected=true;py.appendChild(o)}}
-  await rebuildCurrentSnapshot();updateDriveUI();await renderAll();
+  const restored=restoreGoogleSession();await rebuildCurrentSnapshot();updateDriveUI();if(restored)loadGoogleAccount();else autoReconnectGoogle();await renderAll();
 })();async function migrateWhatsappFields(){
   const cs=await all("customers");let changed=false;
   for(const c of cs){const n=normalizeWhatsApp(c.whatsapp||"");if(c.whatsapp!==n){c.whatsapp=n;await put("customers",c);changed=true}}
