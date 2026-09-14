@@ -1,0 +1,14 @@
+MAHDY-NET Billing - Sync First Bill Patch
+=========================================
+Paket aplikasi UTUH, bukan file patch parsial.
+
+Perubahan:
+- wa-status.json kini ikut membawa registrationDate
+- wa-status.json kini ikut membawa startDate
+- wa-status.json kini ikut membawa firstBillDate
+
+Tujuan:
+Memberi WA Bot batas awal siklus pelanggan yang resmi dari Billing,
+tanpa menghapus atau mengubah mekanisme tunggakan invoice lama.
+
+WA Bot belum diubah dalam paket ini.
