@@ -1,0 +1,31 @@
+MAHDY-NET Billing V8.3.4 FULL PATCH
+===================================
+
+Tujuan patch:
+- wa-status.json sekarang membawa data paket pelanggan secara eksplisit.
+- Relasi paket memakai packageSyncKey -> package.packageCode, BUKAN mencocokkan harga.
+- Customer bot mendapat:
+  packageId, packageSyncKey, packageName, speed
+- outstandingInvoices, earlyPaymentInvoices, latestIssuedInvoice juga membawa snapshot paket
+  agar WA Bot dapat menampilkan nama paket / kecepatan tanpa menebak nominal.
+- Sistem pascabayar, multi-invoice, payment group, Google Drive sync, dan event ledger
+  tetap dipertahankan.
+
+Contoh hasil customer di wa-status.json:
+{
+  "customerId": "C000009",
+  "packageId": "P000001",
+  "packageName": "Reguler",
+  "speed": "10 Mbps"
+}
+
+Cara pakai:
+1. Upload seluruh isi folder ini ke repository GitHub Web Billing.
+2. Buka Web Billing versi terbaru / lakukan hard refresh bila perlu.
+3. Hubungkan Google Drive lalu jalankan Sinkron.
+4. wa-status.json di Drive akan dibuat ulang dengan field paket baru.
+5. Verifikasi customer di wa-status.json sebelum patch WA Bot diterapkan.
+
+Catatan:
+- Tidak ada pencocokan paket berdasarkan harga.
+- Dua paket dengan harga sama tetap aman karena identitas paket mengikuti packageSyncKey/packageCode.
