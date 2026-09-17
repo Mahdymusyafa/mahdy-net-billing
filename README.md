@@ -1,6 +1,6 @@
-# MAHDY-NET Billing V8.3.3 — Favicon + Aset Ringan
+# MAHDY-NET Billing V8.3.4 — Favicon + Aset Ringan
 
-## Tambalan V8.3.3
+## Tambalan V8.3.4
 
 - Menambahkan `assets/favicon.svg` sebagai ikon tab/browser.
 - Logo MAHDY-NET dikonversi dari PNG 1,1 MB menjadi WebP sekitar 18 KB.
