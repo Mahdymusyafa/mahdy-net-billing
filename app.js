@@ -7,7 +7,7 @@ const DRIVE_SCOPE="https://www.googleapis.com/auth/drive.file";
 const LEGACY_MAIN_FILE="mahdy-net-data.json";
 const ROOT_FOLDER="MAHDY-NET Billing";
 const V8_SCHEMA=8;
-const APP_VERSION="8.3.4";
+const APP_VERSION="8.3.5";
 const WA_STATUS_SCHEMA=3;
 const BOT_SERVICE_ACCOUNT="mahdy-net-bot@mahdy-net-billing.iam.gserviceaccount.com";
 const BACKUP_PREFIX="MAHDY-NET_Backup_";
@@ -705,6 +705,29 @@ async function openCustomerDetail(id){
   const ps=(await paymentsForCustomer(id)).sort((a,b)=>b.period.localeCompare(a.period)),hist=$('detailPaymentHistory');hist.innerHTML='';if(!ps.length)hist.innerHTML='<div class="empty-state">Belum ada pembayaran.</div>';
   ps.forEach(p=>{const {year,month}=parsePeriod(p.period),d=document.createElement('div');d.className='history-row';d.innerHTML=`<div><b>${MONTHS[month]} ${year}</b><small>${p.date} · ${p.method}${p.paymentGroupId?` · ${p.paymentGroupId}`:''}</small></div><b>${money(p.amount)}</b>`;hist.appendChild(d)});openModal('customerDetailModal');
 }
+async function deleteCustomer(){
+  if(detailCustomerId==null)return;
+  await ensureV8Migration();
+  const c=(await all('customers')).find(x=>x.id===detailCustomerId);
+  if(!c)return;
+  if(c.active===false){toast('Pelanggan sudah tidak aktif');return}
+
+  const ctx=await invoiceContextForCustomer(c),unpaid=ctx.outstandingCount||0;
+  const warning=unpaid?`\n\nMasih ada ${unpaid} invoice belum lunas. Riwayat invoice dan pembayaran tetap dipertahankan.`:'';
+  if(!confirm(`Hapus pelanggan ${c.name} (${c.customerCode})?\n\nPelanggan akan dihapus dari daftar aktif dan tidak ikut dikirim ke WhatsApp Bot. Data riwayat tetap aman.${warning}`))return;
+
+  await appendLedgerEvent('customer.deactivate',c.syncKey,{
+    customerCode:c.customerCode,
+    customerName:c.name,
+    reason:'Dihapus dari Web Billing',
+    deactivatedAt:nowISO()
+  });
+  await rematerializeLocal();
+  detailCustomerId=null;
+  closeModal('customerDetailModal');
+  toast('Pelanggan dihapus dari daftar aktif');
+}
+
 async function openMultiPayment(){
   if(!detailCustomerId)return;const c=(await all('customers')).find(x=>x.id===detailCustomerId);if(!c)return;const ctx=await invoiceContextForCustomer(c),items=ctx.payable;
   if(!items.length){toast('Tidak ada invoice yang dapat dilunasi');return}multiPaymentCtx={customer:c,items};$('multiPaymentTitle').textContent=`${c.name} · Pilih tagihan`;$('multiPayDate').value=ymdLocal();$('multiPayMethod').value='Tunai';$('multiPayNote').value='';const box=$('multiInvoiceList');box.innerHTML='';
@@ -775,7 +798,7 @@ async function deriveCurrentFilesForV8(st,events){
   }
   const recentPay=events.filter(e=>e.type==='payment.paid'||e.type==='payment.cancelled').sort(eventSort).slice(-500).map(e=>({...e,payload:{...e.payload}})),paymentGroups=buildPaymentGroups(events),maxAt=events.length?[...events].sort(eventSort).at(-1).at:null;
   const bot={schema:WA_STATUS_SCHEMA,app:'MAHDY-NET Billing V8.1',generatedAt:nowISO(),revision:state.revision||0,botEventsFileId:botFile.id,templateCapabilities:{version:1,mode:'adaptive-single-multiple',templates:['dynamic_bill_unpaid','dynamic_bill_paid'],variables:['nama','package_id','nama_paket','kecepatan','jumlah_invoice','rincian_invoice','total_tagihan','tanggal_terbit_terbaru','periode_pemakaian_terbaru','periode_tagihan_terbaru','tanggal_tagihan_berikutnya','tanda_tangan']},customers:botCustomers,packages:packages.filter(p=>p.active!==false).map(p=>({id:p.packageCode||p.syncKey,name:p.name||'',speed:p.speed||'',price:Number(p.price||0),active:true})),paymentEvents:recentPay,paymentGroups};
-  const manifest={schema:8,app:'MAHDY-NET Billing V8.3.4 Fast Event Ledger',revision:state.revision||0,modifiedAt:maxAt||state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length,events:events.length,billingEvents:events.filter(e=>e.deviceId!=='wa-bot').length,botEvents:events.filter(e=>e.deviceId==='wa-bot').length},eventModel:'append-only',syncEngine:'fast-incremental-v2-no-change',eventHash:eventSetHash(events),paymentYears:Object.keys(years).sort()};
+  const manifest={schema:8,app:'MAHDY-NET Billing V8.3.5 Fast Event Ledger',revision:state.revision||0,modifiedAt:maxAt||state.modifiedAt||null,generatedAt:nowISO(),counts:{customers:customers.length,packages:packages.length,payments:payments.length,events:events.length,billingEvents:events.filter(e=>e.deviceId!=='wa-bot').length,botEvents:events.filter(e=>e.deviceId==='wa-bot').length},eventModel:'append-only',syncEngine:'fast-incremental-v2-no-change',eventHash:eventSetHash(events),paymentYears:Object.keys(years).sort()};
   const bundle={manifest,packages:{schema:8,items:packages},customers:{schema:8,items:customers},current:{schema:8,items:cur},summary:summaryFile,paymentYears:years,bot};
   const hashes={packages:contentHash(bundle.packages),customers:contentHash(bundle.customers),current:contentHash(bundle.current),summary:contentHash(bundle.summary),bot:contentHash(bundle.bot),paymentYears:{}};for(const [y,items] of Object.entries(years))hashes.paymentYears[y]=contentHash({schema:8,year:Number(y),items});bundle.manifest.fileHashes=hashes;return bundle;
 }
@@ -789,7 +812,7 @@ async function writeV8DerivedFast(st,bundle,oldManifest){
   await Promise.all(jobs);const manifestCoreChanged=!oldManifest||oldManifest.eventHash!==bundle.manifest.eventHash||JSON.stringify(oldManifest.fileHashes||{})!==JSON.stringify(bundle.manifest.fileHashes||{})||JSON.stringify(oldManifest.counts||{})!==JSON.stringify(bundle.manifest.counts||{});if(manifestCoreChanged){changed.push('manifest.json');await saveKnownJson('manifest.json',bundle.manifest,st.data.id,maps.data)}return{changed};
 }
 async function openSafeSync(){
-  if(!googleAccessToken){toast('Hubungkan Google Drive dulu');showView('dataView');return}const btn=$('safeSyncBtn'),label=btn.querySelector('.sync-button-label');btn.classList.add('busy');label.textContent='Memeriksa perubahan…';try{await ensureV8Migration();const [local,st]=await Promise.all([allLedgerEvents(),ensureDriveStructure()]),head=await getCloudHeaderV8(st),localSummary=summary(await exportData()),cc=head.manifest?.counts||{};$('localCustomerCount').textContent=`${localSummary.customers} pelanggan`;$('localPaymentCount').textContent=`${localSummary.payments} pembayaran · ${local.length} event`;$('localModified').textContent=(await getState()).modifiedAt?new Date((await getState()).modifiedAt).toLocaleString('id-ID'):'Belum ada perubahan';$('cloudCustomerCount').textContent=head.kind==='empty'?'Belum ada data':`${cc.customers??'?'} pelanggan`;$('cloudPaymentCount').textContent=head.kind==='empty'?'—':`${cc.payments??'?'} pembayaran · ${cc.billingEvents??'?'} event billing · ${cc.botEvents??'?'} event bot`;$('cloudModified').textContent=head.manifest?.modifiedAt?new Date(head.manifest.modifiedAt).toLocaleString('id-ID'):head.kind.toUpperCase();const w=$('syncWarning');w.className='sync-warning good';w.innerHTML=`<b>Fast No-Change Mode V8.3.4.</b> Jika sidik data HP, Drive, dan bot sama, proses berhenti tanpa menghitung atau menulis ulang file. Jika ada perubahan, sinkron penuh berjalan otomatis.`;$('pullDriveBtn').classList.add('hidden');$('pushDriveBtn').classList.add('hidden');$('mergeDriveBtn')?.classList.remove('hidden');openModal('syncModal')}catch(e){alert('Gagal membandingkan event: '+e.message)}finally{btn.classList.remove('busy');label.textContent='Bandingkan & Sinkron'}
+  if(!googleAccessToken){toast('Hubungkan Google Drive dulu');showView('dataView');return}const btn=$('safeSyncBtn'),label=btn.querySelector('.sync-button-label');btn.classList.add('busy');label.textContent='Memeriksa perubahan…';try{await ensureV8Migration();const [local,st]=await Promise.all([allLedgerEvents(),ensureDriveStructure()]),head=await getCloudHeaderV8(st),localSummary=summary(await exportData()),cc=head.manifest?.counts||{};$('localCustomerCount').textContent=`${localSummary.customers} pelanggan`;$('localPaymentCount').textContent=`${localSummary.payments} pembayaran · ${local.length} event`;$('localModified').textContent=(await getState()).modifiedAt?new Date((await getState()).modifiedAt).toLocaleString('id-ID'):'Belum ada perubahan';$('cloudCustomerCount').textContent=head.kind==='empty'?'Belum ada data':`${cc.customers??'?'} pelanggan`;$('cloudPaymentCount').textContent=head.kind==='empty'?'—':`${cc.payments??'?'} pembayaran · ${cc.billingEvents??'?'} event billing · ${cc.botEvents??'?'} event bot`;$('cloudModified').textContent=head.manifest?.modifiedAt?new Date(head.manifest.modifiedAt).toLocaleString('id-ID'):head.kind.toUpperCase();const w=$('syncWarning');w.className='sync-warning good';w.innerHTML=`<b>Fast No-Change Mode V8.3.5.</b> Jika sidik data HP, Drive, dan bot sama, proses berhenti tanpa menghitung atau menulis ulang file. Jika ada perubahan, sinkron penuh berjalan otomatis.`;$('pullDriveBtn').classList.add('hidden');$('pushDriveBtn').classList.add('hidden');$('mergeDriveBtn')?.classList.remove('hidden');openModal('syncModal')}catch(e){alert('Gagal membandingkan event: '+e.message)}finally{btn.classList.remove('busy');label.textContent='Bandingkan & Sinkron'}
 }
 async function syncEventLedger({showResult=true}={}){
   if(!googleAccessToken)throw new Error('Hubungkan Google Drive dulu');if(driveWriteLock)throw new Error('Sinkronisasi masih berjalan');driveWriteLock=true;const started=performance.now();try{
@@ -809,12 +832,13 @@ async function syncEventLedger({showResult=true}={}){
     const report={fastNoChange:false,mode:'full',syncDate:ymdLocal(),localHash:eventSetHash(union),remoteSignature:finalRemote.signature,botSignature:driveFileSig(finalBot.file||{}),localBefore,driveEvents:mergeEventSets(finalRemote.events).length,botEvents:finalBot.events.length,legacyEvents:legacyEvents.length,mergedEvents:union.length,customers:mat.customers.length,payments:mat.payments.length,eventFilesDownloaded:remote.downloaded+finalRemote.downloaded,eventFilesFromCache:remote.cached+finalRemote.cached,deviceLogChanged:dev.changed,derivedFilesChanged:write.changed,elapsedMs:elapsed};await put('meta',{key:'lastV8Sync',at:nowISO(),syncDate:report.syncDate,report,...report});if(showResult)toast(`Fast Sync selesai · ${(elapsed/1000).toFixed(1)} dtk · ${union.length} event`);return report;
   }finally{driveWriteLock=false}
 }
-async function mergeDriveNow(){if(!confirm('Gabungkan event HP + Google Drive + WhatsApp Bot sekarang?\n\nFast Sync hanya mengunduh event yang berubah. Event Ledger tetap append-only dan log perangkat dibackup delta sebelum ditulis.'))return;try{const r=await syncEventLedger();closeModal('syncModal');await renderAll();if(r.fastNoChange){alert(`Fast Check selesai.\n\nWaktu: ${(r.elapsedMs/1000).toFixed(1)} detik\nTidak ada perubahan. Tidak ada file yang ditulis ulang.\nEvent: ${r.mergedEvents}\nPelanggan: ${r.customers}`);return}alert(`Fast Event Sync selesai.\n\nWaktu: ${(r.elapsedMs/1000).toFixed(1)} detik\nEvent gabungan: ${r.mergedEvents}\nEvent file diunduh: ${r.eventFilesDownloaded}\nCache event dipakai: ${r.eventFilesFromCache}\nFile turunan berubah: ${r.derivedFilesChanged.length}\nPelanggan: ${r.customers}\nInvoice LUNAS: ${r.payments}`)}catch(e){alert('Sinkron V8.3.4 dihentikan: '+e.message)}}
+async function mergeDriveNow(){if(!confirm('Gabungkan event HP + Google Drive + WhatsApp Bot sekarang?\n\nFast Sync hanya mengunduh event yang berubah. Event Ledger tetap append-only dan log perangkat dibackup delta sebelum ditulis.'))return;try{const r=await syncEventLedger();closeModal('syncModal');await renderAll();if(r.fastNoChange){alert(`Fast Check selesai.\n\nWaktu: ${(r.elapsedMs/1000).toFixed(1)} detik\nTidak ada perubahan. Tidak ada file yang ditulis ulang.\nEvent: ${r.mergedEvents}\nPelanggan: ${r.customers}`);return}alert(`Fast Event Sync selesai.\n\nWaktu: ${(r.elapsedMs/1000).toFixed(1)} detik\nEvent gabungan: ${r.mergedEvents}\nEvent file diunduh: ${r.eventFilesDownloaded}\nCache event dipakai: ${r.eventFilesFromCache}\nFile turunan berubah: ${r.derivedFilesChanged.length}\nPelanggan: ${r.customers}\nInvoice LUNAS: ${r.payments}`)}catch(e){alert('Sinkron V8.3.5 dihentikan: '+e.message)}}
 async function exportData(){const state=await getState();return{schema:8,app:'MAHDY-NET Billing V8.1 Fast Event Ledger',revision:state.revision||0,modifiedAt:state.modifiedAt||null,exportedAt:nowISO(),packages:await all('packages'),customers:await all('customers'),payments:await all('payments'),events:await allLedgerEvents()}}
 function updateDriveUI(){const ok=!!googleAccessToken;$('driveBadge').classList.toggle('ok',ok);$('driveBadge').querySelector('span').textContent=ok?'Drive terhubung':'Drive belum terhubung';$('driveStatusText').textContent=ok?'Terhubung · Fast Event Sync siap':'Belum terhubung';$('driveAccountText').textContent=ok?(googleAccountLabel||'Sesi Google tersimpan di perangkat ini'):'Akun Google belum dipilih';$('topDriveText').textContent=ok?'● Terhubung':'Belum terhubung';$('topDrivePill').classList.toggle('connected',ok);$('connectDriveBtn').classList.toggle('hidden',ok);$('driveAccountActions').classList.toggle('hidden',!ok)}
 
 $('multiPaymentOpenBtn')?.addEventListener('click',openMultiPayment);
 $('saveMultiPaymentBtn')?.addEventListener('click',saveMultiPayment);
+$('deleteCustomerBtn')?.addEventListener('click',deleteCustomer);
 
 function showView(id){
   document.querySelectorAll(".view").forEach(v=>v.classList.toggle("active",v.id===id));
